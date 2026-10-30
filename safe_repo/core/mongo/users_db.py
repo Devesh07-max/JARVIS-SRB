@@ -11,7 +11,7 @@ database = mongo["jarvis_srb_new"]
 
 # Preserve existing collection structure
 db = database["users_db"]
-referral_claims = db.referral_claims
+referral_claims = database["referral_claims"]
 
 
 async def get_users():
