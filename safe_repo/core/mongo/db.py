@@ -4,7 +4,7 @@ from config import MONGO_DB
 from motor.motor_asyncio import AsyncIOMotorClient as MongoCli
 
 mongo = MongoCli(MONGO_DB)
-db = mongo.user_data
+db = mongo.jarvis_srb_new
 db = db.users_data_db
 
 
