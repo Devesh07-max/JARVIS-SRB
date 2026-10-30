@@ -1,0 +1,19 @@
+JustRunMy.App deployment
+
+Startup command:
+python -m safe_repo
+
+Required environment variables:
+BOT_TOKEN
+API_ID
+API_HASH
+OWNER_ID
+MONGO_DB
+LOG_GROUP
+CHANNEL_ID
+CHANNEL_ID_2 (optional)
+
+The Flask health endpoint listens on 0.0.0.0 and uses PORT (default 5000).
+FFmpeg is available through imageio-ffmpeg when a system ffmpeg binary is not present.
+
+IMPORTANT: never commit real Telegram/MongoDB credentials to this ZIP.
