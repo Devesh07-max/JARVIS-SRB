@@ -1,5 +1,7 @@
 import os
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template, render_template_string, request
+
+from config import PLAN_CONFIG, FREE_TRIAL_USES, BATCH_SIZE, SUPPORT_URL, PREMIUM_URL
 
 from safe_repo.core.payment_service import (
     read_checkout_token, create_order, verify_checkout_payment,
@@ -10,12 +12,12 @@ app = Flask(__name__)
 
 CHECKOUT_HTML = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>JARVIS Premium Checkout</title><script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<title>JARVIS SRB Premium Checkout</title><script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <style>
 *{box-sizing:border-box}body{margin:0;background:#eef3f8;color:#172033;font-family:Arial,sans-serif;min-height:100vh;display:grid;place-items:center;padding:18px}
 .card{width:min(100%,460px);background:#fff;border-radius:22px;padding:26px;box-shadow:0 14px 45px #15233a18}.brand{font-weight:800;font-size:22px;letter-spacing:.3px}.muted{color:#65728a;line-height:1.5}.plan{background:#f4f7fb;border-radius:15px;padding:17px;margin:20px 0}.label{font-size:13px;color:#65728a}.amount{font-size:34px;font-weight:800;margin:7px 0}.row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:14px 0}.switch{display:flex;background:#edf1f6;padding:4px;border-radius:12px}.switch button{border:0;border-radius:9px;padding:9px 15px;font-weight:700;background:transparent;color:#526078}.switch button.active{background:#fff;color:#172033;box-shadow:0 1px 5px #0001}.pay{width:100%;border:0;border-radius:13px;background:#1769e0;color:#fff;font-size:17px;font-weight:800;padding:16px;cursor:pointer}.pay:disabled{opacity:.55;cursor:wait}.note{font-size:12px;color:#748096;margin-top:15px;line-height:1.5}.status{margin-top:16px;padding:12px;border-radius:10px;display:none;line-height:1.5}.ok{background:#e8f8ee;color:#176536}.bad{background:#fff0ee;color:#9e2d20}.hidden{display:none}
 </style></head><body><main class="card">
-<div class="brand">⚡ JARVIS Batches</div><p class="muted">Secure Premium subscription checkout</p>
+<div class="brand">♛ JARVIS SRB</div><p class="muted">Secure Premium subscription checkout</p>
 <div class="plan"><div class="label">SELECTED PLAN</div><h2 id="planName" style="margin:6px 0 2px"></h2><div class="muted" id="duration"></div><div class="amount" id="amount">—</div><div class="label">Your subscription activates automatically after successful payment verification.</div></div>
 <div class="row"><b>Payment currency</b><div class="switch"><button id="inr" class="active" onclick="setCurrency('INR')">INR ₹</button><button id="usd" onclick="setCurrency('USD')">USD $</button></div></div>
 <button class="pay" id="pay" onclick="startPayment()">Pay securely with Razorpay</button>
@@ -34,16 +36,78 @@ function show(msg,good){const el=document.getElementById('status');el.style.disp
 (async()=>{try{const r=await fetch('https://ipapi.co/json/');const d=await r.json();if(d&&d.country_code&&d.country_code!=='IN')setCurrency('USD');}catch(e){}})();
 async function startPayment(){if(busy)return;busy=true;const btn=document.getElementById('pay');btn.disabled=true;btn.textContent='Creating secure order…';
 try{const r=await fetch('/api/payment/order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,currency})});const data=await r.json();if(!r.ok)throw new Error(data.error||'Could not create payment order.');
-const options={key:keyId,amount:data.amount,currency:data.currency,name:'JARVIS Batches',description:plan+' - '+duration,order_id:data.order_id,theme:{color:'#1769e0'},handler:async function(response){btn.textContent='Verifying payment…';try{const vr=await fetch('/api/payment/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,razorpay_order_id:response.razorpay_order_id,razorpay_payment_id:response.razorpay_payment_id,razorpay_signature:response.razorpay_signature})});const result=await vr.json();if(!vr.ok)throw new Error(result.error||'Verification failed.');if(result.pending){show(result.message||'Payment is awaiting capture. Premium is not active yet; check /myplan shortly.',false);btn.disabled=false;btn.textContent='Check /myplan or retry';busy=false;}else{show(result.message||'Payment verified. Check your Telegram bot for activation confirmation.',true);btn.textContent='Payment submitted';}}catch(e){show(e.message+' If money was deducted, do not pay again immediately; check /myplan or contact admin.',false);btn.disabled=false;btn.textContent='Retry payment';busy=false;}},modal:{ondismiss:function(){btn.disabled=false;btn.textContent='Retry payment';busy=false;show('Checkout closed. No premium has been activated. You can retry payment.',false);}}};
+const options={key:keyId,amount:data.amount,currency:data.currency,name:'JARVIS SRB',description:plan+' - '+duration,order_id:data.order_id,theme:{color:'#1769e0'},handler:async function(response){btn.textContent='Verifying payment…';try{const vr=await fetch('/api/payment/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,razorpay_order_id:response.razorpay_order_id,razorpay_payment_id:response.razorpay_payment_id,razorpay_signature:response.razorpay_signature})});const result=await vr.json();if(!vr.ok)throw new Error(result.error||'Verification failed.');if(result.pending){show(result.message||'Payment is awaiting capture. Premium is not active yet; check /myplan shortly.',false);btn.disabled=false;btn.textContent='Check /myplan or retry';busy=false;}else{show(result.message||'Payment verified. Check your Telegram bot for activation confirmation.',true);btn.textContent='Payment submitted';}}catch(e){show(e.message+' If money was deducted, do not pay again immediately; check /myplan or contact admin.',false);btn.disabled=false;btn.textContent='Retry payment';busy=false;}},modal:{ondismiss:function(){btn.disabled=false;btn.textContent='Retry payment';busy=false;show('Checkout closed. No premium has been activated. You can retry payment.',false);}}};
 const rz=new Razorpay(options);rz.on('payment.failed',function(resp){show((resp.error&&resp.error.description)||'Payment failed. No premium has been activated. Please retry.',false);btn.disabled=false;btn.textContent='Retry payment';busy=false;});rz.open();btn.textContent='Complete payment in Razorpay';
 }catch(e){show(e.message,false);btn.disabled=false;btn.textContent='Retry payment';busy=false;}}
 money();
 </script></body></html>'''
 
 
-@app.route('/')
+def _website_context():
+    ordered = ["basic", "standard", "premium", "ultimate", "elite"]
+    plans = []
+    for key in ordered:
+        info = PLAN_CONFIG[key]
+        plans.append({
+            "key": key,
+            "label": info["label"].replace("⚡", "").replace("🥈", "").replace("🥇", "").replace("💎", "").replace("🔥", "").replace("✨", "").strip(),
+            "daily_limit": info.get("daily_limit"),
+            "batch": bool(info.get("batch")),
+            "batch_limit": info.get("batch_limit", 0),
+            "range": bool(info.get("range")),
+            "no_footer": bool(info.get("no_footer")),
+            "prices": info["inr"],
+            "usd": info["usd"],
+        })
+    return {
+        "plans": plans,
+        "free_trial_uses": FREE_TRIAL_USES,
+        "batch_size": BATCH_SIZE,
+        "support_url": "https://t.me/PremiumPurchaseRobot",
+        "channel_url": "https://t.me/YashXBots",
+        "premium_url": PREMIUM_URL,
+        "page": "home",
+    }
+
+
+@app.route("/")
 def home():
-    return "<center><h2>JARVIS Save Restricted Content Bot</h2><p>Bot service is running.</p></center>"
+    return render_template("index.html", **_website_context())
+
+
+@app.route("/pricing")
+def pricing():
+    return render_template("pricing.html", **_website_context(), page="pricing")
+
+
+@app.route("/about")
+def about():
+    return render_template("about.html", **_website_context(), page="about")
+
+
+@app.route("/contact")
+def contact():
+    return render_template("contact.html", **_website_context(), page="contact")
+
+
+@app.route("/faq")
+def faq():
+    return render_template("faq.html", **_website_context(), page="faq")
+
+
+@app.route("/terms")
+def terms():
+    return render_template("terms.html", **_website_context(), page="terms")
+
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html", **_website_context(), page="privacy")
+
+
+@app.route("/refund")
+def refund():
+    return render_template("refund.html", **_website_context(), page="refund")
 
 
 @app.route('/checkout/<token>')
@@ -109,7 +173,8 @@ def razorpay_webhook():
 
 def run_web_server():
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=port, threads=4, channel_timeout=30)
 
 
 if __name__ == "__main__":
