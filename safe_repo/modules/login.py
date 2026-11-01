@@ -89,7 +89,7 @@ async def generate_session(_, message):
         "start", "help", "id", "login", "logout", "myplan", "premium",
         "buypremium", "batch", "cancel", "reset", "customisations", "add", "rem",
         "check", "premiumlist", "premiumusers", "plist", "stats", "gcast",
-        "announce", "speedtest", "admincommands"
+        "announce", "speedtest", "admincommands", "redeempremium"
     ])
 )
 async def login_input(_, message):
