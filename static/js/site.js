@@ -5,15 +5,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const open = nav.classList.toggle("open");
     toggle.setAttribute("aria-expanded", String(open));
   });
-
   document.querySelectorAll(".duration-btn").forEach(button => {
     button.addEventListener("click", () => {
       const duration = button.dataset.duration;
-      document.querySelectorAll(".duration-btn").forEach(b => {
-        const active = b === button;
-        b.classList.toggle("active", active);
-        b.setAttribute("aria-pressed", String(active));
-      });
+      document.querySelectorAll(".duration-btn").forEach(b => b.classList.toggle("active", b.dataset.duration === duration));
       document.querySelectorAll(".inr-price").forEach(el => {
         el.textContent = "₹" + Number(el.dataset[duration]).toLocaleString("en-IN");
       });
@@ -22,6 +17,10 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       document.querySelectorAll(".duration-label").forEach(el => {
         el.textContent = "/ " + (duration === "yearly" ? "year" : duration === "monthly" ? "month" : "week");
+      });
+      document.querySelectorAll(".price-card .btn-card").forEach(link => {
+        link.href = link.href.replace(/\/(weekly|monthly|yearly)$/, "/" + duration);
+        link.textContent = "Buy " + duration.charAt(0).toUpperCase() + duration.slice(1) + " →";
       });
     });
   });

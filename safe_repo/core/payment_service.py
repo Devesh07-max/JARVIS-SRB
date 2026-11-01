@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import razorpay
@@ -39,7 +40,19 @@ def _link_secret():
 
 
 def create_checkout_token(user_id, plan, duration):
-    payload = {"u": int(user_id), "p": plan, "d": duration, "e": int(time.time()) + 1800}
+    payload = {"u": int(user_id), "p": plan, "d": duration, "m": "bot", "e": int(time.time()) + 1800}
+    return _sign_checkout_payload(payload)
+
+
+def create_website_checkout_token(plan, duration):
+    """Create a public website checkout that issues a one-time redeem code."""
+    if plan not in PLAN_CONFIG or duration not in DURATION_DAYS:
+        raise ValueError("Invalid plan or duration")
+    payload = {"p": plan, "d": duration, "m": "redeem", "e": int(time.time()) + 1800}
+    return _sign_checkout_payload(payload)
+
+
+def _sign_checkout_payload(payload):
     raw = json.dumps(payload, separators=(",", ":")).encode()
     import base64
     body = base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -58,8 +71,12 @@ def read_checkout_token(token):
         payload = json.loads(raw)
         if int(payload.get("e", 0)) < int(time.time()):
             return None
-        if int(payload["u"]) <= 0 or payload["p"] not in PLAN_CONFIG or payload["d"] not in DURATION_DAYS:
+        mode = payload.get("m", "bot")  # legacy signed bot links remain valid
+        if mode not in ("bot", "redeem") or payload["p"] not in PLAN_CONFIG or payload["d"] not in DURATION_DAYS:
             return None
+        if mode == "bot" and int(payload.get("u", 0)) <= 0:
+            return None
+        payload["m"] = mode
         return payload
     except Exception:
         return None
@@ -79,14 +96,15 @@ def create_order(payload, currency):
         "currency": currency,
         "receipt": ("jb" + uuid.uuid4().hex[:18])[:40],
         "notes": {
-            "telegram_user_id": str(payload["u"]),
+            "telegram_user_id": str(payload.get("u", "")),
             "plan": payload["p"],
             "duration": payload["d"],
-            "source": "jarvis_save_restricted_bot",
+            "source": "website_redeem" if payload.get("m") == "redeem" else "jarvis_save_restricted_bot",
         },
     })
     payment_collection.insert_one({
-        "_id": order["id"], "user_id": int(payload["u"]), "plan": payload["p"],
+        "_id": order["id"], "user_id": int(payload["u"]) if payload.get("u") else None,
+        "purchase_mode": payload.get("m", "bot"), "plan": payload["p"],
         "duration": payload["d"], "currency": currency, "amount": amount,
         "status": "created", "created_at": datetime.now(timezone.utc),
     })
@@ -105,11 +123,62 @@ def _notify_user(user_id, text):
         print(f"Telegram payment notification failed: {exc}")
 
 
+def issue_redeem_code(order_id):
+    """Create or return the same redeem code for a captured website order."""
+    order = payment_collection.find_one({"_id": order_id})
+    if not order:
+        raise ValueError("Payment order was not found.")
+    if order.get("purchase_mode") != "redeem":
+        return None
+    if order.get("redeem_code"):
+        return order["redeem_code"]
+    for _ in range(5):
+        code = "JARVIS-" + secrets.token_hex(6).upper()
+        payment_collection.update_one(
+            {"_id": order_id, "redeem_code": {"$exists": False}},
+            {"$set": {"redeem_code": code, "status": "redeem_ready", "redeem_created_at": datetime.now(timezone.utc)}},
+        )
+        current = payment_collection.find_one({"_id": order_id}) or {}
+        if current.get("redeem_code"):
+            return current["redeem_code"]
+    raise RuntimeError("Could not generate a unique redeem code. Please contact support.")
+
+
+def redeem_premium_code(code, user_id):
+    """Bind a paid website code to one Telegram account and activate it once."""
+    normalized = (code or "").strip().upper()
+    order = payment_collection.find_one({"redeem_code": normalized, "purchase_mode": "redeem"})
+    if not order or order.get("status") not in ("redeem_ready", "redeeming", "activating", "activated"):
+        return False, "❌ Invalid code. Please check it and try again."
+    owner = order.get("redeemed_by")
+    if owner and int(owner) != int(user_id):
+        return False, "❌ This redeem code has already been used. Each code can be redeemed only once."
+    if order.get("status") == "activated" and owner == int(user_id):
+        return False, "ℹ️ This code has already been redeemed by your account. Use /myplan to check your Premium."
+    if not owner:
+        claimed = payment_collection.update_one(
+            {"_id": order["_id"], "status": "redeem_ready", "redeemed_by": {"$exists": False}},
+            {"$set": {"status": "redeeming", "redeemed_by": int(user_id), "user_id": int(user_id),
+                      "redeemed_at": datetime.now(timezone.utc)}},
+        )
+        if not claimed.modified_count:
+            return redeem_premium_code(normalized, user_id)
+    else:
+        payment_collection.update_one(
+            {"_id": order["_id"], "redeemed_by": int(user_id)},
+            {"$set": {"user_id": int(user_id)}},
+        )
+    ok, message = activate_order(order["_id"], order.get("payment_id"))
+    return ok, message
+
+
 def activate_order(order_id, payment_id=None):
     """Apply the paid order once, extending from the later of now/current expiry."""
     order = payment_collection.find_one({"_id": order_id})
     if not order:
         return False, "Payment order was not found. Contact admin."
+    if not order.get("user_id"):
+        return False, "This website purchase must be redeemed in Telegram first."
     if order.get("status") == "activated":
         return True, "Your Premium plan is already active."
     claim = payment_collection.find_one_and_update(
@@ -152,7 +221,12 @@ def activate_order(order_id, payment_id=None):
 
 
 def verify_checkout_payment(token_payload, order_id, payment_id, signature):
-    order = payment_collection.find_one({"_id": order_id, "user_id": int(token_payload["u"])})
+    order_filter = {"_id": order_id}
+    if token_payload.get("m", "bot") == "bot":
+        order_filter["user_id"] = int(token_payload["u"])
+    else:
+        order_filter["purchase_mode"] = "redeem"
+    order = payment_collection.find_one(order_filter)
     if not order:
         raise ValueError("Order does not match this checkout session.")
     if order["plan"] != token_payload["p"] or order["duration"] != token_payload["d"]:
@@ -170,6 +244,9 @@ def verify_checkout_payment(token_payload, order_id, payment_id, signature):
     if payment.get("status") != "captured" and not payment.get("captured"):
         payment_collection.update_one({"_id": order_id}, {"$set": {"status": "pending_capture", "payment_id": payment_id}})
         return False, "Payment is not captured yet. Please wait a moment and check /myplan."
+    if order.get("purchase_mode") == "redeem":
+        code = issue_redeem_code(order_id)
+        return True, "Payment verified. Your redeem code is ready: " + code
     return activate_order(order_id, payment_id)
 
 
@@ -191,7 +268,10 @@ def process_webhook_event(event):
     if event.get("event") == "payment.captured":
         order = payment_collection.find_one({"_id": order_id})
         if order and int(payload.get("amount", -1)) == int(order["amount"]) and payload.get("currency") == order["currency"]:
-            activate_order(order_id, payment_id)
+            if order.get("purchase_mode") == "redeem":
+                issue_redeem_code(order_id)
+            else:
+                activate_order(order_id, payment_id)
     elif event.get("event") == "payment.failed":
         payment_collection.update_one(
             {"_id": order_id, "status": {"$nin": ["activated", "activating"]}},

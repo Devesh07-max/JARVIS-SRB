@@ -2,7 +2,7 @@ from pyrogram import filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from safe_repo import app
 from config import PREMIUM_URL, FREE_TRIAL_USES, PLAN_CONFIG, PUBLIC_BASE_URL
-from safe_repo.core.payment_service import create_checkout_token
+from safe_repo.core.payment_service import create_checkout_token, redeem_premium_code
 
 PLAN_ORDER = ["basic", "standard", "premium", "ultimate", "elite"]
 DURATION_LABELS = {"weekly": "🔹 Weekly", "monthly": "📅 Monthly", "yearly": "🔥 Yearly"}
@@ -61,6 +61,36 @@ PREMIUM_TEXT = build_plans_text()
 @app.on_message(filters.command(["premium", "buypremium"]))
 async def premium_info(_, message):
     await message.reply_text(PREMIUM_TEXT, reply_markup=premium_keyboard(), disable_web_page_preview=True)
+
+
+@app.on_message(filters.command("redeempremium"))
+async def redeem_premium(_, message):
+    website_url = (PUBLIC_BASE_URL or "https://jarvis-srb.onrender.com").rstrip("/")
+    if len(message.command) < 2:
+        text = (
+            "🎟️ **Redeem Premium Code**\n\n"
+            "Is command ka use website se purchase karne ke baad mila hua unique code redeem karne ke liye hota hai.\n\n"
+            "**Kaise redeem karein?**\n"
+            "1️⃣ Website ke Pricing page par plan aur duration choose karke payment complete karein.\n"
+            "2️⃣ Payment ke baad mila code copy karein.\n"
+            "3️⃣ Yahan is format mein bhejein:\n"
+            "`/redeempremium JARVIS-XXXXXXXXXXXX`\n\n"
+            "✅ Code verify hote hi aapka purchased Premium plan activate ho jayega.\n"
+            "⚠️ Har code sirf ek baar aur ek Telegram account par redeem ho sakta hai.\n\n"
+            "Agar abhi purchase nahi kiya hai, website par plans aur direct payment available hain."
+        )
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Visit Website & Buy Premium", url=f"{website_url}/pricing")]])
+        return await message.reply_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+
+    code = message.command[1].strip()
+    if len(code) > 80:
+        return await message.reply_text("❌ Invalid redeem code format. Please send the code exactly as shown on the website.")
+    try:
+        ok, result = redeem_premium_code(code, message.from_user.id)
+    except Exception as exc:
+        print(f"Premium code redemption failed: {exc}")
+        return await message.reply_text("⚠️ Code redemption could not be completed right now. Please try again shortly or contact support.")
+    await message.reply_text(result, disable_web_page_preview=True)
 
 
 @app.on_callback_query(filters.regex(r"^buyplan:(basic|standard|premium|ultimate|elite)$"))
