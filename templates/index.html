@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero wrap">
+  <div class="hero-copy">
+    <div class="eyebrow"><span class="pulse"></span> TELEGRAM SAVE RESTRICTED CONTENT BOT</div>
+    <h1>JARVIS <span>SRB</span></h1>
+    <h2>Save <em>Restricted</em> Content with Ease!</h2>
+    <p class="hero-lead">Download and access supported Telegram content through one streamlined bot experience. Choose the tools and subscription level that fit your workflow.</p>
+    <div class="hero-actions"><a class="btn btn-primary" href="#how-it-works">➤ Explore How It Works <b>→</b></a><a class="btn btn-outline" href="#pricing">♛ View Premium Plans <b>→</b></a></div>
+    <div class="hero-stats">
+      <div><b>{{ batch_size }}</b><small>Maximum batch size</small></div><i></i>
+      <div><b>{{ free_trial_uses }}</b><small>Free trial uses</small></div><i></i>
+      <div><b>INR / USD</b><small>Checkout currencies</small></div>
+    </div>
+  </div>
+  <div class="hero-art"><img src="{{ url_for('static', filename='images/jarvis-robot.jpg') }}" alt="JARVIS SRB futuristic blue Telegram technology illustration"><div class="art-orbit"></div><div class="art-tag">SAVE MORE. <b>ACCESS BETTER.</b></div></div>
+</section>
+
+<section class="section wrap" id="features">
+  <div class="section-heading"><span>✦ &nbsp; POWERFUL FEATURES &nbsp; ✦</span><h2>Why Choose <em>JARVIS SRB?</em></h2><p>Useful capabilities built into the existing JARVIS SRB Telegram bot.</p></div>
+  <div class="feature-grid">
+    <article class="feature-card"><div class="feature-icon">↯</div><h3>Flexible Content Saving</h3><p>Save supported media from private or public Telegram chats and channels where your account has access.</p></article>
+    <article class="feature-card"><div class="feature-icon">▣</div><h3>Batch Processing</h3><p>Process multiple links with batch support on eligible plans, with a configured maximum batch size of {{ batch_size }}.</p></article>
+    <article class="feature-card"><div class="feature-icon">✎</div><h3>Custom Captions</h3><p>Customize captions and remove or replace unwanted words in filenames and captions.</p></article>
+    <article class="feature-card"><div class="feature-icon">▧</div><h3>Thumbnail Options</h3><p>Use saved thumbnails and automatic video thumbnail generation where supported by the media.</p></article>
+    <article class="feature-card"><div class="feature-icon">⇢</div><h3>Forward &amp; Deliver</h3><p>Configure forwarding destinations and use direct media handling supported by the bot.</p></article>
+    <article class="feature-card"><div class="feature-icon">♛</div><h3>Premium Controls</h3><p>Plan-based daily limits, batch/range access and Elite no-footer behaviour are managed by the bot.</p></article>
+  </div>
+</section>
+
+<section class="section how-section" id="how-it-works"><div class="wrap">
+  <div class="section-heading"><span>✦ &nbsp; HOW IT WORKS &nbsp; ✦</span><h2>Get Started in <em>4 Simple Steps</em></h2><p>A straightforward path from Telegram to your selected plan.</p></div>
+  <div class="steps">
+    <div class="step"><b>01</b><div class="step-icon">➤</div><h3>Open the Bot</h3><p>Start JARVIS SRB<br>on Telegram.</p></div><div class="step-arrow">⟶</div>
+    <div class="step"><b>02</b><div class="step-icon">♛</div><h3>Choose a Plan</h3><p>Select your preferred<br>plan &amp; duration.</p></div><div class="step-arrow">⟶</div>
+    <div class="step"><b>03</b><div class="step-icon">▣</div><h3>Complete Payment</h3><p>Pay securely through<br>Razorpay checkout.</p></div><div class="step-arrow">⟶</div>
+    <div class="step"><b>04</b><div class="step-icon success">✓</div><h3>Enjoy Your Plan</h3><p>Premium activates after<br>payment verification.</p></div>
+  </div>
+</div></section>
+
+<section class="section wrap" id="pricing">
+  <div class="section-heading"><span>✦ &nbsp; SUBSCRIPTION PLANS &nbsp; ✦</span><h2>Choose Your <em>Perfect Plan</em></h2><p>Real plan names, limits and prices from the bot configuration. Select a duration to compare available rates.</p></div>
+  <div class="duration-switch" role="group" aria-label="Choose subscription duration"><button class="duration-btn active" data-duration="weekly">Weekly</button><button class="duration-btn" data-duration="monthly">Monthly</button><button class="duration-btn" data-duration="yearly">Yearly</button></div>
+  <div class="pricing-grid">
+  {% for plan in plans %}
+    <article class="price-card {{ 'popular' if plan.key == 'premium' else '' }}">
+      {% if plan.key == 'premium' %}<div class="popular-tag">POPULAR</div>{% endif %}
+      <div class="plan-symbol">{{ {'basic':'⚡','standard':'◈','premium':'♛','ultimate':'✧','elite':'✦'}[plan.key] }}</div>
+      <h3>{{ plan.label }}</h3>
+      <div class="price-line"><strong class="inr-price" data-weekly="{{ plan.prices.weekly }}" data-monthly="{{ plan.prices.monthly }}" data-yearly="{{ plan.prices.yearly }}">₹{{ plan.prices.weekly }}</strong><span class="duration-label">/ week</span></div>
+      <div class="usd-line">International: <b class="usd-price" data-weekly="{{ '%.2f'|format(plan.usd.weekly) }}" data-monthly="{{ '%.2f'|format(plan.usd.monthly) }}" data-yearly="{{ '%.2f'|format(plan.usd.yearly) }}">${{ '%.2f'|format(plan.usd.weekly) }}</b></div>
+      <ul class="plan-benefits">
+        <li>✓ {% if plan.daily_limit is none %}Unlimited links per day{% else %}{{ plan.daily_limit }} links per day{% endif %}</li>
+        <li>✓ {% if plan.batch %}Batch processing{% else %}Single-link processing{% endif %}</li>
+        {% if plan.range %}<li>✓ Range processing</li>{% endif %}
+        {% if plan.no_footer %}<li>✓ No automatic footer / watermark</li>{% endif %}
+        {% if plan.key == 'basic' %}<li>✓ Essential plan access</li>{% elif plan.key == 'standard' %}<li>✓ Batch limit: 50</li>{% elif plan.key == 'premium' %}<li>✓ Batch limit: 100</li>{% elif plan.key in ['ultimate','elite'] %}<li>✓ Batch size up to {{ batch_size }}</li>{% endif %}
+      </ul>
+      <a class="btn btn-card" href="/contact">Get Started <b>→</b></a>
+    </article>
+  {% endfor %}
+  </div>
+  <p class="pricing-note">Prices are shown for reference. To purchase, use <b>/buypremium</b> in the Telegram bot to generate your secure checkout link. International payments depend on Razorpay account availability.</p>
+</section>
+
+<section class="trust-section"><div class="wrap trust-inner"><div><span>BUILT AROUND YOUR WORKFLOW</span><h2>Designed for a <em>simpler experience</em></h2><p>Plan limits and payment status are handled by the existing bot backend. Successful captured payments are verified before premium access is activated.</p></div><div class="trust-points"><div><b>01</b><span>Signed checkout links</span></div><div><b>02</b><span>Server-side payment verification</span></div><div><b>03</b><span>Automatic premium activation</span></div></div></div></section>
+
+<section class="section wrap bottom-grid">
+  <div class="faq-mini"><span class="mini-label">FREQUENTLY ASKED QUESTIONS</span><h2>Got questions? <em>We've got answers.</em></h2>
+    <details><summary>Is JARVIS SRB free to use?</summary><p>New users are configured to receive {{ free_trial_uses }} free uses. Additional usage and limits depend on the active plan and referral tokens.</p></details>
+    <details><summary>How can I get Premium?</summary><p>Use /buypremium in the Telegram bot, select a plan and duration, then open the checkout link generated by the bot.</p></details>
+    <details><summary>How is Premium activated?</summary><p>The backend verifies payment details and captured status. After successful verification, the selected plan is activated automatically.</p></details>
+    <details><summary>What if payment succeeds but access is not updated?</summary><p>Check /myplan in Telegram. If the issue remains, contact the support team using the details on the Contact page.</p></details>
+    <a class="text-link" href="/faq">View all FAQs →</a>
+  </div>
+  <div class="contact-panel"><span class="mini-label">CONTACT &amp; SUPPORT</span><h2>Need help? <em>Contact us.</em></h2><p>For purchase questions, payment issues or product support, contact our Telegram support team.</p><a class="btn btn-primary" href="https://t.me/PremiumPurchaseRobot" target="_blank" rel="noopener noreferrer">➤ @PremiumPurchaseRobot</a><a class="btn btn-outline channel-button" href="https://t.me/YashXBots" target="_blank" rel="noopener noreferrer">Join Our Channel →</a></div>
+</section>
+{% endblock %}
