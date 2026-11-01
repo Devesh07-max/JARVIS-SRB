@@ -20,7 +20,7 @@ def admin_keyboard():
         [InlineKeyboardButton("➕ Add Premium", callback_data="admin_add"), InlineKeyboardButton("➖ Remove Premium", callback_data="admin_rem")],
         [InlineKeyboardButton("🔎 Check Premium", callback_data="admin_check"), InlineKeyboardButton("👑 Premium List", callback_data="admin_list")],
         [InlineKeyboardButton("📊 Statistics", callback_data="admin_stats"), InlineKeyboardButton("⚡ Speed Test", callback_data="admin_speed")],
-        [InlineKeyboardButton("🧾 Plan Guide", callback_data="admin_plans"), InlineKeyboardButton("💳 Payment History", callback_data="admin_payments")],
+        [InlineKeyboardButton("🧾 Plan Guide", callback_data="admin_plans")],
         [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("📣 Announcement", callback_data="admin_announce")],
         [InlineKeyboardButton("💬 Message User", callback_data="admin_pm")],
     ])
@@ -298,7 +298,7 @@ async def admincommands(_, message):
     )
 
 
-@app.on_callback_query(filters.regex(r'^admin_(add|rem|check|list|stats|speed|plans|payments|broadcast|announce|pm)$'))
+@app.on_callback_query(filters.regex(r'^admin_(add|rem|check|list|stats|speed|plans|broadcast|announce|pm)$'))
 async def admin_callback(client, query):
     if query.from_user.id not in OWNER_ID:
         await query.answer('Admin only.', show_alert=True)
@@ -330,18 +330,6 @@ async def admin_callback(client, query):
                 lines.append(f"{info['label']}\n   Daily: `{limit}` | /batch: `{batch}`{feature}\n   Price: `{prices}`")
             lines.append('╰━━━━━━━━━━━━━━━━━━━━╯')
             await app.send_message(admin_id, '\n'.join(lines))
-        elif action == 'payments':
-            from safe_repo.core.payment_service import payment_collection
-            records = list(payment_collection.find({}, {"_id": 1, "user_id": 1, "plan": 1, "duration": 1, "currency": 1, "amount": 1, "status": 1, "created_at": 1}).sort("created_at", -1).limit(15))
-            if not records:
-                await app.send_message(admin_id, "📭 No payment records found yet.")
-            else:
-                lines = ["╭━━━〔 💳 PAYMENT HISTORY 〕━━━╮", ""]
-                for item in records:
-                    amount = item.get("amount", 0) / 100
-                    lines.append(f"🆔 `{item.get('_id')}`\n👤 `{item.get('user_id')}` | {item.get('plan')} {item.get('duration')}\n💰 {item.get('currency')} {amount:g} | `{item.get('status')}`")
-                lines.append("╰━━━━━━━━━━━━━━━━━━━━╯")
-                await app.send_message(admin_id, "\n\n".join(lines))
         elif action == 'speed':
             msg = await app.send_message(
                 admin_id,

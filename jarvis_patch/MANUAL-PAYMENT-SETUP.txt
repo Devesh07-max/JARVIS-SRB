@@ -1,0 +1,35 @@
+JARVIS SRB - MANUAL PREMIUM PAYMENT MODE
+
+Included changed files:
+- safe_repo/modules/premium.py: removes Pay Here/checkout/redeem flow and sends your QR with the requested UPI instructions.
+- safe_repo/modules/admincommands.py: removes the obsolete Razorpay payment-history menu/action. Existing Add Premium admin flow remains the manual activation method.
+- config.py: removes Razorpay/website checkout configuration and retains PAYMENT_QR_PATH.
+- app.py: removes all public website/checkout/API routes. Keeps only / and /health so the existing single Render Web Service can continue passing health checks.
+- requirements.txt: removes the Razorpay SDK dependency.
+- .env.example: documents the optional QR path.
+
+IMPORTANT QR SETUP:
+1. Put your own QR image in the repository root as: payment_qr.jpg
+2. Or set PAYMENT_QR_PATH to the exact path of the QR image in Render.
+3. Commit and push the QR image along with the code, unless using a persistent mounted path.
+4. If the QR image is missing, the bot will display a clear warning instead of crashing.
+
+Manual activation:
+- User sends payment screenshot and Telegram User ID.
+- Admin uses the existing /admincommands -> Add Premium flow.
+- Send: USER_ID PLAN DURATION
+  Example: 123456789 elite 1 month
+- This existing admin flow activates the plan and notifies the user.
+
+The plan definitions, existing INR/USD prices, durations, quotas, trial uses, download features, and other bot modules are not changed.
+
+Website removal:
+Delete these tracked paths from the repository after applying the patch:
+- templates/
+- static/
+- safe_repo/core/payment_service.py
+
+No automatic Razorpay checkout, webhook, payment verification, or redeem-code flow remains active after these deletions and the included changes.
+
+Render note:
+The Flask server is intentionally retained as a minimal health endpoint because this project currently runs as one Render Docker Web Service. It is not a website or checkout page. The bot and its existing runtime architecture remain unchanged.

@@ -18,5 +18,4 @@ imageio-ffmpeg
 speedtest-cli
 pymongo
 
-razorpay>=1.4.2
 waitress>=3.0,<4
