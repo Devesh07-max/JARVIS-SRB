@@ -79,37 +79,51 @@ def home():
 
 @app.route("/pricing")
 def pricing():
-    return render_template("pricing.html", **_website_context(), page="pricing")
+    context = _website_context()
+    context["page"] = "pricing"
+    return render_template("pricing.html", **context)
 
 
 @app.route("/about")
 def about():
-    return render_template("about.html", **_website_context(), page="about")
+    context = _website_context()
+    context["page"] = "about"
+    return render_template("about.html", **context)
 
 
 @app.route("/contact")
 def contact():
-    return render_template("contact.html", **_website_context(), page="contact")
+    context = _website_context()
+    context["page"] = "contact"
+    return render_template("contact.html", **context)
 
 
 @app.route("/faq")
 def faq():
-    return render_template("faq.html", **_website_context(), page="faq")
+    context = _website_context()
+    context["page"] = "faq"
+    return render_template("faq.html", **context)
 
 
 @app.route("/terms")
 def terms():
-    return render_template("terms.html", **_website_context(), page="terms")
+    context = _website_context()
+    context["page"] = "terms"
+    return render_template("terms.html", **context)
 
 
 @app.route("/privacy")
 def privacy():
-    return render_template("privacy.html", **_website_context(), page="privacy")
+    context = _website_context()
+    context["page"] = "privacy"
+    return render_template("privacy.html", **context)
 
 
 @app.route("/refund")
 def refund():
-    return render_template("refund.html", **_website_context(), page="refund")
+    context = _website_context()
+    context["page"] = "refund"
+    return render_template("refund.html", **context)
 
 
 @app.route('/buy/<plan>/<duration>')
