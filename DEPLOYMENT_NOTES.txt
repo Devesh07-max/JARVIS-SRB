@@ -17,3 +17,12 @@ The Flask health endpoint listens on 0.0.0.0 and uses PORT (default 5000).
 FFmpeg is available through imageio-ffmpeg when a system ffmpeg binary is not present.
 
 IMPORTANT: never commit real Telegram/MongoDB credentials to this ZIP.
+
+
+JARVIS SRB upgrade notes
+
+- External media downloader: yt-dlp is installed from requirements.txt. Dockerfile installs ffmpeg for MP4 merging and MP3 extraction. Send a supported public media URL directly to the bot; Telegram message links continue through the original Telegram pipeline.
+- /dlbots: requires the user's own Telegram session created with /login. It lists accessible bot chats and recent media messages only. Protected-content restrictions are not bypassed.
+- FloodWait: long waits pause the current batch file and show a Resume Download button after the timer. If the process restarts during a pause, the bot reports the interrupted Telegram link instead of claiming the batch resumed.
+- Forward destinations: manage saved channels under /customisations -> Forward Chat ID. Reset Customisation leaves the saved channel list and selected destination untouched.
+- PayPal: configure PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET. Use https://api-m.sandbox.paypal.com for sandbox tests; set PAYPAL_BASE_URL=https://api-m.paypal.com for live payments. PayPal is USD-priced using the existing plan USD prices. Never commit credentials.

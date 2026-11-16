@@ -32,6 +32,11 @@ async def safe_repo_boot():
 
     for all_module in ALL_MODULES:
         importlib.import_module("safe_repo.modules." + all_module)
+    try:
+        from safe_repo.modules.main import recover_interrupted_batches
+        await recover_interrupted_batches()
+    except Exception as exc:
+        print(f"Interrupted batch recovery startup error: {exc}")
     print("»»»» ʙᴏᴛ ᴅᴇᴘʟᴏʏ sᴜᴄᴄᴇssғᴜʟʟʏ ✨ 🎉")
 
     # Keep the reference Telethon client alive so its callback/input handlers

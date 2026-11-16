@@ -1249,34 +1249,55 @@ def save_authorized_users(authorized_users):
 
 SUPER_USERS = load_authorized_users()
 
-# Destination chat ID. Each user now has exactly one saved forwarding destination.
-# Legacy `chat_ids` arrays are migrated by keeping the first valid ID.
-user_chat_ids = {}
+# Saved forwarding destinations and the currently selected destination are kept
+# separately. Reset Customisation must never erase this independent setting.
+user_forward_destinations = {}
+user_chat_ids = {}  # active destination only, retained for existing upload callers
 try:
-    for _doc in collection.find({"$or": [{"chat_ids": {"$exists": True}}, {"chat_id": {"$exists": True}}]}):
-        _raw = _doc.get("chat_ids")
-        if not _raw:
-            _raw = [_doc.get("chat_id")] if _doc.get("chat_id") is not None else []
-        if isinstance(_raw, (int, str)):
-            _raw = [_raw]
-        # Keep only the first configured destination; multi-destination forwarding is disabled.
-        if _raw:
-            _raw = [_raw[0]]
-        ids = []
-        for _value in _raw:
+    for _doc in collection.find({"$or": [
+        {"forward_destinations": {"$exists": True}},
+        {"chat_ids": {"$exists": True}},
+        {"chat_id": {"$exists": True}},
+    ]}):
+        raw_destinations = _doc.get("forward_destinations") or []
+        destinations = []
+        for item in raw_destinations:
+            if isinstance(item, dict) and item.get("chat_id") is not None:
+                try:
+                    cid = int(item["chat_id"])
+                    destinations.append({"chat_id": cid, "title": str(item.get("title") or cid)[:100]})
+                except (TypeError, ValueError):
+                    continue
+        if not destinations:
+            legacy = _doc.get("chat_ids")
+            if not legacy:
+                legacy = [_doc.get("chat_id")] if _doc.get("chat_id") is not None else []
+            if isinstance(legacy, (int, str)):
+                legacy = [legacy]
+            for value in legacy or []:
+                try:
+                    cid = int(value)
+                    if cid and all(x["chat_id"] != cid for x in destinations):
+                        destinations.append({"chat_id": cid, "title": str(cid)})
+                except (TypeError, ValueError):
+                    continue
+        if destinations:
+            uid = _doc["_id"]
+            user_forward_destinations[uid] = destinations
+            selected = _doc.get("active_forward_chat_id", _doc.get("chat_id"))
             try:
-                _value = int(_value)
-                if _value and _value not in ids:
-                    ids.append(_value)
+                selected = int(selected) if selected is not None else None
             except (TypeError, ValueError):
-                pass
-        if ids:
-            user_chat_ids[_doc["_id"]] = ids
+                selected = None
+            if selected is None and "active_forward_chat_id" not in _doc and _doc.get("chat_id") is None:
+                selected = destinations[0]["chat_id"]
+            if selected and any(x["chat_id"] == selected for x in destinations):
+                user_chat_ids[uid] = [selected]
 except Exception as e:
     print(f"Chat ID preference load error: {e}")
 
 def _parse_chat_id_list(raw_text):
-    """Parse exactly one Telegram chat ID."""
+    """Parse one Telegram destination ID."""
     raw = str(raw_text or "").strip().split()[0] if str(raw_text or "").strip() else ""
     if not raw:
         return []
@@ -1466,6 +1487,32 @@ async def _send_thumb_preview(event, user_id, kind):
 
 
 
+async def show_forward_destinations(event, user_id):
+    destinations = user_forward_destinations.get(user_id, [])
+    selected = (user_chat_ids.get(user_id) or [None])[0]
+    rows = []
+    for item in destinations:
+        cid = item["chat_id"]
+        title = item.get("title") or str(cid)
+        prefix = "✅ " if cid == selected else "▫️ "
+        rows.append([Button.inline((prefix + title)[:60], f"fwdsel:{cid}".encode())])
+    rows.append([Button.inline("➕ Add New Channel", b"fwdadd")])
+    if destinations:
+        rows.append([Button.inline("🗑️ Delete Channel", b"fwddelmenu")])
+    if selected:
+        rows.append([Button.inline("🚫 Deselect Forward Chat ID", b"fwdoff")])
+    rows.append([Button.inline("⬅️ Close", b"fwdclose")])
+    await event.respond(
+        "╭━━━〔 🆔 𝗙𝗢𝗥𝗪𝗔𝗥𝗗 𝗗𝗘𝗦𝗧𝗜𝗡𝗔𝗧𝗜𝗢𝗡𝗦 〕━━━╮\n\n"
+        "Choose a saved channel to enable forwarding.\n\n"
+        f"📌 Saved channels: `{len(destinations)}`\n"
+        f"🎯 Active destination: `{selected if selected else 'Forwarding OFF'}`\n\n"
+        "Use Add New Channel to save another destination.\n"
+        "╰━━━━━━━━━━━━━━━━━━━━╯",
+        buttons=rows,
+    )
+
+
 async def reset_user_customisations(user_id):
     """Clear user customisation preferences while preserving thumbnails and login/premium data."""
     key = str(user_id)
@@ -1478,13 +1525,12 @@ async def reset_user_customisations(user_id):
             "rename_tag": "",
             "caption": "",
             "replacement_words": "",
-            "delete_words": "",
-            "chat_ids": "",
-            "chat_id": ""
+            "delete_words": ""
         }},
         upsert=True,
     )
-    user_chat_ids.pop(user_id, None)
+    # Forward destinations are managed independently from customisation reset.
+    # Preserve both the saved destination list and the currently selected target.
     sessions.pop(user_id, None)
     return True
 
@@ -1513,17 +1559,53 @@ async def callback_query_handler(event):
         save_replacement_words(user_id,{})
         await event.respond("╭━━━〔 🗑️ 𝗥𝗘𝗣𝗟𝗔𝗖𝗘𝗠𝗘𝗡𝗧𝗦 𝗖𝗟𝗘𝗔𝗥𝗘𝗗 〕━━━╮\n\nAll replacement rules have been removed.\n╰━━━━━━━━━━━━━━━━━━━━╯")
     elif event.data == b'setforwardchat':
-        current = user_chat_ids.get(user_id, [])
-        current_text = "\n".join(f"• `{x}`" for x in current) if current else "• None saved yet"
+        await show_forward_destinations(event, user_id)
+    elif event.data == b'fwdadd':
         await event.respond(
-            "╭━━━〔 🆔 𝗙𝗢𝗥𝗪𝗔𝗥𝗗 𝗖𝗛𝗔𝗧 𝗜𝗗 〕━━━╮\n\n"
-            "Send the single destination Chat ID where the bot should forward uploaded files.\n\n"
-            "💡 Example:\n`-1001111111111`\n\n"
-            f"📌 Current saved IDs:\n{current_text}\n\n"
-            "⚠️ The bot must be able to access and send messages to every destination.\n"
-            "╰━━━━━━━━━━━━━━━━━━━━╯"
+            "➕ **Add New Forward Channel**\n\n"
+            "Send the channel Chat ID (example: `-1001234567890`).\n"
+            "Make sure the JARVIS bot is an administrator and can post messages there."
         )
-        sessions[user_id]='setforwardchat'
+        sessions[user_id] = 'setforwardchat'
+    elif event.data == b'fwdoff':
+        user_chat_ids.pop(user_id, None)
+        collection.update_one({"_id": user_id}, {"$set": {"active_forward_chat_id": None}, "$unset": {"chat_id": "", "chat_ids": ""}}, upsert=True)
+        await event.respond("🚫 **Forwarding disabled.**\n\nYour saved channel list has been preserved.")
+        await show_forward_destinations(event, user_id)
+    elif event.data == b'fwddelmenu':
+        rows = [[Button.inline("🗑️ " + str(x.get("title") or x["chat_id"])[:48], f"fwddel:{x['chat_id']}".encode())] for x in user_forward_destinations.get(user_id, [])]
+        rows.append([Button.inline("⬅️ Back", b"setforwardchat")])
+        await event.respond("Select the saved channel you want to delete:", buttons=rows)
+    elif event.data.startswith(b'fwdsel:'):
+        try:
+            cid = int(event.data.decode().split(":", 1)[1])
+            if not any(x["chat_id"] == cid for x in user_forward_destinations.get(user_id, [])):
+                raise ValueError("not saved")
+            user_chat_ids[user_id] = [cid]
+            collection.update_one({"_id": user_id}, {"$set": {"active_forward_chat_id": cid, "chat_id": cid, "chat_ids": [cid]}}, upsert=True)
+            await event.respond(f"✅ **Forwarding enabled.**\n\nSelected destination: `{cid}`")
+            await show_forward_destinations(event, user_id)
+        except Exception:
+            await event.respond("❌ This saved channel could not be selected. Please refresh the list.")
+    elif event.data.startswith(b'fwddel:'):
+        try:
+            cid = int(event.data.decode().split(":", 1)[1])
+            destinations = [x for x in user_forward_destinations.get(user_id, []) if x["chat_id"] != cid]
+            user_forward_destinations[user_id] = destinations
+            selected = (user_chat_ids.get(user_id) or [None])[0]
+            if selected == cid:
+                user_chat_ids.pop(user_id, None)
+            update = {"$set": {"forward_destinations": destinations}}
+            if selected == cid:
+                update["$set"]["active_forward_chat_id"] = None
+                update["$unset"] = {"chat_id": "", "chat_ids": ""}
+            collection.update_one({"_id": user_id}, update, upsert=True)
+            await event.respond("🗑️ **Saved channel deleted.**")
+            await show_forward_destinations(event, user_id)
+        except Exception:
+            await event.respond("❌ Could not delete that channel.")
+    elif event.data == b'fwdclose':
+        await event.respond("Forward destination menu closed.")
     elif event.data == b'addsession':
         await event.respond("ℹ️ **Use /login** to connect your Telegram account.")
     elif event.data == b'delete':
@@ -1557,7 +1639,7 @@ async def callback_query_handler(event):
                 "✅ Rename tag removed\n"
                 "✅ Replacement rules removed\n"
                 "✅ Remove-word rules removed\n"
-                "✅ Forward Chat ID removed\n\n"
+                "✅ Forward Chat ID settings are unchanged\n\n"
                 "🖼️ Saved thumbnails are unchanged.\n"
                 "🔐 Login and Premium are unchanged.\n"
                 "╰━━━━━━━━━━━━━━━━━━━━╯"
@@ -1650,11 +1732,21 @@ async def _validate_and_save_forward_chat_ids(user_id, text):
             invalid.append(f"{raw_target} — {err_msg}")
 
     if valid:
-        valid = valid[:1]
-        user_chat_ids[user_id] = valid
+        target = valid[0]
+        try:
+            chat = await app.get_chat(target)
+            title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(target)
+        except Exception:
+            title = str(target)
+        destinations = list(user_forward_destinations.get(user_id, []))
+        if not any(x["chat_id"] == target for x in destinations):
+            destinations.append({"chat_id": target, "title": str(title)[:100]})
+        user_forward_destinations[user_id] = destinations
+        user_chat_ids[user_id] = [target]
         collection.update_one(
             {"_id": user_id},
-            {"$set": {"chat_ids": valid, "chat_id": valid[0]}},
+            {"$set": {"forward_destinations": destinations, "active_forward_chat_id": target,
+                      "chat_ids": [target], "chat_id": target}},
             upsert=True,
         )
         return True, valid, invalid
@@ -1695,7 +1787,7 @@ async def handle_user_input(event):
             lines = [
                 "╭━━━〔 ✅ 𝗙𝗢𝗥𝗪𝗔𝗥𝗗 𝗖𝗛𝗔𝗧 𝗜𝗗 𝗦𝗔𝗩𝗘𝗗 〕━━━╮",
                 "",
-                f"📤 Saved destinations: `{len(valid)}`",
+                f"📤 Saved destinations: `{len(user_forward_destinations.get(user_id, []))}`",
                 "",
             ]
             lines.extend(f"• `{chat_id}`" for chat_id in valid[:1])
@@ -1704,7 +1796,7 @@ async def handle_user_input(event):
                 lines.extend(f"• {item}" for item in invalid)
             lines += [
                 "",
-                "🚀 Forwarding is now enabled for the saved destinations.",
+                "🚀 Forwarding is now enabled for the selected channel.",
                 "╰━━━━━━━━━━━━━━━━━━━━╯",
             ]
             await event.respond("\n".join(lines))

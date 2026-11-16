@@ -47,10 +47,19 @@ PREMIUM_PLAN_4 = "Unlimited ♾️ + /batch + range"
 PREMIUM_PLAN_5 = ""
 PREMIUM_PLAN_6 = ""
 
-# Manual premium payments: place your QR image at the project root or set this path.
-PAYMENT_QR_PATH = getenv("PAYMENT_QR_PATH", "payment_qr.jpg").strip() or "payment_qr.jpg"
+# Razorpay checkout configuration. Set these in Render Environment Variables.
+RAZORPAY_KEY_ID = getenv("RAZORPAY_KEY_ID", "").strip()
+RAZORPAY_KEY_SECRET = getenv("RAZORPAY_KEY_SECRET", "").strip()
+RAZORPAY_WEBHOOK_SECRET = getenv("RAZORPAY_WEBHOOK_SECRET", "").strip()
+PAYMENT_LINK_SECRET = getenv("PAYMENT_LINK_SECRET", "").strip()
+PUBLIC_BASE_URL = getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
-PREMIUM_PURCHASE_TEXT = """💎 Premium Purchase\n\nChoose a plan and duration. Indian users can pay by UPI using the QR shown by the bot, then send the payment screenshot and Telegram User ID to the Admin. International users can contact the Admin for a payment link. Premium is activated manually after payment verification.\n"""
+PREMIUM_PURCHASE_TEXT = """💎 Premium Purchase
+
+Choose a plan, select its duration and tap Pay Here. Complete payment securely through Razorpay. Your plan will activate automatically after payment verification.
+
+If a payment fails or is cancelled, no plan will be activated. You can retry payment from the bot.
+"""
 
 FREE_TRIAL_USES = 10
 BATCH_SIZE = 400
@@ -100,4 +109,10 @@ PLAN_CONFIG = {
 }
 
 DEFAULT_PLAN = "basic"
+PAYMENT_QR_PATH = getenv("PAYMENT_QR_PATH", "payment_qr.jpg")
 MEDIA_FOOTER = "@Restricted_Content_SaveBot ⚡"
+
+# PayPal REST checkout. Set LIVE credentials for production or SANDBOX credentials for testing.
+PAYPAL_CLIENT_ID = getenv("PAYPAL_CLIENT_ID", "").strip()
+PAYPAL_CLIENT_SECRET = getenv("PAYPAL_CLIENT_SECRET", "").strip()
+PAYPAL_BASE_URL = getenv("PAYPAL_BASE_URL", "https://api-m.sandbox.paypal.com").strip().rstrip("/")

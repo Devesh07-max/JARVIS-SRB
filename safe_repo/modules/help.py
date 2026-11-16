@@ -20,6 +20,8 @@ Here is everything you need to get started.
 │ 💎 /premium — View Premium information.
 │ 🛒 /buypremium — View plans & buying instructions.
 │ 📦 /batch — Process a range of messages.
+│ 🌐 Send a supported YouTube/Instagram/other media URL to download it.
+│ 🤖 /dlbots — Browse media in your other Telegram bot chats (login required).
 │ ⛔ /cancel — Stop an active batch/file.
 │ 🔄 /reset — Force-reset a stuck/pending task.
 │ ⚙️ /customisations — Manage saved preferences.
@@ -29,6 +31,7 @@ Here is everything you need to get started.
 ╭─〔 🔗 𝗦𝗘𝗡𝗗 𝗔 𝗟𝗜𝗡𝗞 〕
 │
 │ For one message, simply send its Telegram link.
+│ For external media, send the supported platform URL directly.
 │
 │ **Example:**
 │ `https://t.me/channel/123`

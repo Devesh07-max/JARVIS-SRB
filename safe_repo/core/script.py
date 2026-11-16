@@ -16,6 +16,7 @@ You receive **10 free uses** when you start a new account.
 │ 🔗 Send a Telegram message link directly
 │ 🔐 Use /login for private sources
 │ 📦 Use /batch for multiple messages
+│ 🤖 Use /dlbots to browse media from your other bot chats
 │ 📋 Check your access with /myplan
 │ 💎 Need more? Open /buypremium
 │
