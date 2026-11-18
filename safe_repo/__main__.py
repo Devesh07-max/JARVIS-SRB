@@ -33,6 +33,11 @@ async def safe_repo_boot():
     for all_module in ALL_MODULES:
         importlib.import_module("safe_repo.modules." + all_module)
     try:
+        from safe_repo.modules.auto_update import start_auto_update_worker
+        start_auto_update_worker()
+    except Exception as exc:
+        print(f"Auto Update worker startup error: {exc}")
+    try:
         from safe_repo.modules.main import recover_interrupted_batches
         await recover_interrupted_batches()
     except Exception as exc:

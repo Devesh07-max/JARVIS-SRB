@@ -1463,6 +1463,7 @@ async def customisations_command(event):
         [Button.inline("👀 Video Preview", b'videopreview'), Button.inline("👀 Media Preview", b'mediapreview')],
         [Button.inline("🗑️ Delete Video Thumb", b'delvideothumb'), Button.inline("🗑️ Delete Media Thumb", b'delmediathumb')],
         [Button.inline("🆔 Forward Chat ID", b'setforwardchat')],
+        [Button.inline("🔄 Auto Update", b"au:list")],
         [Button.inline("🔐 Login", b'addsession'), Button.inline("🚪 Logout", b'logout')],
         [Button.inline("🧹 Reset Customisation", b'reset_customisation')],
     ]
