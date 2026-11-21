@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -34,6 +35,49 @@ SESSIONS = {}
 SESSION_TTL_SECONDS = 20 * 60
 
 
+def _yt_dlp_base_options():
+    """Return stable yt-dlp options without inheriting host-level config.
+
+    The Docker image installs Deno; when available, yt-dlp can use it for
+    supported JavaScript-dependent extractors such as YouTube.
+    """
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "ignoreconfig": True,
+    }
+    deno_path = shutil.which("deno")
+    if deno_path:
+        options["js_runtimes"] = {"deno": {"path": deno_path}}
+    return options
+
+
+def _friendly_media_error(error):
+    """Turn common platform authentication/JS errors into actionable text."""
+    detail = str(error)
+    lowered = detail.lower()
+    if any(term in lowered for term in (
+        "cookies", "sign in", "login required", "confirm you're not a bot",
+        "age-restricted", "age restricted", "members-only", "private video",
+    )):
+        return (
+            "This link requires account sign-in, cookies, or additional access "
+            "verification. JARVIS currently supports publicly accessible media "
+            "only; it does not import private browser sessions or bypass login, "
+            "age, or platform verification checks. Try a public link that is "
+            "available without signing in."
+        )
+    if any(term in lowered for term in (
+        "javascript", "js runtime", "deno", "signature extraction",
+    )):
+        return (
+            "The platform's media page needs a JavaScript runtime or an updated "
+            "extractor. The Docker deployment includes Deno; rebuild/redeploy "
+            "the latest image and try again."
+        )
+    return detail[:700]
+
+
 def _is_telegram_url(url):
     try:
         return (urlparse(url).hostname or "").lower() in TELEGRAM_HOSTS
@@ -55,8 +99,7 @@ def _clean_url(text):
 
 def _extract_info(url):
     opts = {
-        "quiet": True,
-        "no_warnings": True,
+        **_yt_dlp_base_options(),
         "skip_download": True,
         "noplaylist": True,
         "socket_timeout": 20,
@@ -105,11 +148,10 @@ def _format_options(info):
 def _download(url, fmt, output_dir, audio=False, progress_hook=None):
     template = str(Path(output_dir) / "%(title).120B-%(id)s.%(ext)s")
     opts = {
+        **_yt_dlp_base_options(),
         "format": fmt,
         "outtmpl": template,
         "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
         "retries": 3,
         "fragment_retries": 3,
         "socket_timeout": 30,
@@ -194,8 +236,8 @@ async def external_media_link(_, message):
     except Exception as exc:
         await status.edit_text(
             "❌ **Unable to read this media link.**\n\n"
-            f"{str(exc)[:700]}\n\n"
-            "The platform may require login, the post may be private, or this URL may not be supported by the current yt-dlp version."
+            f"{_friendly_media_error(exc)}\n\n"
+            "The link may be private, unavailable, or unsupported by the current platform extractor."
         )
 
 
@@ -314,7 +356,7 @@ async def download_selected_media(_, query):
         wait = int(getattr(fw, "value", 0) or 0)
         await status.edit_text(f"⏳ **Telegram FloodWait**\n\nPaused for `{wait}` seconds. Please retry after the wait.")
     except Exception as exc:
-        await status.edit_text(f"❌ **Download failed.**\n\n{str(exc)[:900]}")
+        await status.edit_text(f"❌ **Download failed.**\n\n{_friendly_media_error(exc)}")
     finally:
         SESSIONS.pop(key, None)
         shutil.rmtree(work_dir, ignore_errors=True)
