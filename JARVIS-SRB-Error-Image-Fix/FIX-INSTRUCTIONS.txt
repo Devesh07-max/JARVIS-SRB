@@ -1,0 +1,8 @@
+JARVIS SRB: Internal Server Error + missing homepage robot image fix
+
+Extract this ZIP into the root of ~/JARVIS-SRB and overwrite app.py.
+The static/images/jarvis-robot.jpg asset is restored at the exact path used by the homepage template.
+
+This patch fixes duplicate page keyword arguments in /pricing, /about, /contact, /faq, /terms, /privacy and /refund routes by building the website context first and overriding context['page'].
+
+No payment code, bot purchase logic, configuration, database schema, or other files are changed.

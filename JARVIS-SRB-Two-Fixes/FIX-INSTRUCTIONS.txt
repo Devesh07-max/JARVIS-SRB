@@ -1,0 +1,26 @@
+JARVIS SRB - Two targeted fixes
+
+1) Replace safe_repo/modules/login.py
+   The generic private-text login handler previously did not exclude /redeempremium.
+   Pyrogram runs only the first matching handler in a group, so the login handler
+   consumed /redeempremium and the redeem handler never received it.
+   This patch adds redeempremium to the excluded command list.
+
+2) Replace templates/index.html
+   The homepage referenced static/images/jarvis-hero.webp, but the repository
+   contains static/images/jarvis-robot.jpg. The template now points to the
+   existing image file. Do not delete or rename the existing image.
+
+Termux steps (from project root):
+  unzip -o ~/storage/downloads/JARVIS-SRB-Two-Fixes.zip
+  git add safe_repo/modules/login.py templates/index.html
+  git commit -m "Fix redeem command routing and homepage image"
+  git pull --rebase origin main
+  git push origin main
+
+After Render deploys, test:
+  /redeempremium
+  /redeempremium JARVIS-XXXXXXXXXXXX
+
+The first command should return the instructions and website link. The second
+will redeem only a valid, paid, unused website code.

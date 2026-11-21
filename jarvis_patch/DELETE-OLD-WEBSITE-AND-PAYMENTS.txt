@@ -1,0 +1,6 @@
+After copying the patch files into the repository, delete these old tracked paths:
+
+rm -rf templates static
+rm -f safe_repo/core/payment_service.py
+
+These paths contain the old public website, checkout UI assets, and automatic Razorpay/redeem-code implementation. The new app.py keeps only the minimal Render health endpoint.

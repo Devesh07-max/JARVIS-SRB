@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block title %}Frequently Asked Questions — JARVIS SRB{% endblock %}{% block content %}
+<section class="page-hero wrap"><span class="eyebrow">JARVIS SRB</span><h1>Everything you need to know.</h1><p>Answers below reflect the current bot configuration and payment flow.</p></section>
+<section class="section wrap"><div class="policy-content"><div class="policy-content faq-list">
+<details open><summary>What is JARVIS SRB?</summary><p>A Telegram bot for supported restricted-content and media workflows, with plan-based limits and additional tools.</p></details>
+<details><summary>How do I start?</summary><p>Open the Telegram bot and use /start. Available commands and actions are shown by the bot.</p></details>
+<details><summary>What are the subscription plans?</summary><p>Basic, Standard, Premium, Ultimate and Elite are configured, each with weekly, monthly and yearly prices in INR and USD.</p></details>
+<details><summary>How do I purchase Premium?</summary><p>You can buy directly from this website: open Pricing, choose a plan and duration, and pay securely through Razorpay. You can also use /buypremium in Telegram, choose a plan and duration, and tap Pay Here.</p></details>
+<details><summary>How is Premium activated?</summary><p>For payments made inside Telegram, Premium activates automatically after Razorpay payment verification. For website purchases, you receive a unique redeem code after successful payment. Send /redeempremium YOUR-CODE to the Telegram bot to activate the purchased plan.</p></details>
+<details><summary>Can I use a redeem code more than once?</summary><p>No. Each website purchase code is unique and can be redeemed only once, by one Telegram account. Keep the code safe until you redeem it.</p></details>
+<details><summary>What if payment succeeds but Premium is not activated?</summary><p>Check /myplan first. If access is still missing, contact support before paying again.</p></details>
+<details><summary>How do referrals work?</summary><p>A valid new-user referral adds 2 trial uses to the referrer's account. Referral rewards do not change Premium plans.</p></details>
+</div></div></section>{% endblock %}
