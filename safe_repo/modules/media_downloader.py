@@ -56,16 +56,29 @@ def _friendly_media_error(error):
     """Turn common platform authentication/JS errors into actionable text."""
     detail = str(error)
     lowered = detail.lower()
+    if (
+        "confirm you're not a bot" in lowered
+        or "sign in to confirm" in lowered
+        or "not a bot" in lowered
+    ):
+        return (
+            "YouTube is currently refusing this automated server request with "
+            "its bot-verification check. This can happen even for a public video; "
+            "it does not by itself mean the video is private. JARVIS cannot bypass "
+            "YouTube verification or import browser sign-in sessions. The "
+            "downloader now uses the updated yt-dlp release and configured Deno "
+            "runtime; if YouTube continues to block the server, this video cannot "
+            "be fetched from this deployment at the moment. Please try again later."
+        )
     if any(term in lowered for term in (
-        "cookies", "sign in", "login required", "confirm you're not a bot",
-        "age-restricted", "age restricted", "members-only", "private video",
+        "cookies", "sign in", "login required", "age-restricted",
+        "age restricted", "members-only", "private video",
     )):
         return (
-            "This link requires account sign-in, cookies, or additional access "
-            "verification. JARVIS currently supports publicly accessible media "
-            "only; it does not import private browser sessions or bypass login, "
-            "age, or platform verification checks. Try a public link that is "
-            "available without signing in."
+            "This media link requires sign-in, cookies, or additional access "
+            "verification. JARVIS supports publicly accessible media only and "
+            "does not import private browser sessions or bypass login, age, or "
+            "platform verification checks."
         )
     if any(term in lowered for term in (
         "javascript", "js runtime", "deno", "signature extraction",

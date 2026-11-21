@@ -21,4 +21,4 @@ pymongo
 razorpay>=1.4.2
 waitress>=3.0,<4
 
-yt-dlp[default]>=2025.11.12
+yt-dlp[default]>=2026.10.26
