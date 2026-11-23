@@ -1,0 +1,29 @@
+JARVIS-SRB PATCH CHANGELOG
+
+1) Save Restricted /batch FloodWait
+- Batch now pauses automatically and tells the user the FloodWait duration.
+- It waits outside the per-file transfer timeout and retries the same current link.
+- The batch continues with the remaining links after a successful retry.
+- Cancellation and unexpected stops now report in-flight and remaining links.
+- If Render restarts during a FloodWait, it reports the current and remaining links rather than silently losing the batch.
+
+2) Video thumbnails and timeline
+- Fixed FFmpeg thumbnail scaling for landscape, portrait and square videos.
+- Saved thumbnails are normalized before upload; invalid saved thumbnails are not sent with a large video.
+- Added OpenCV metadata fallback when ffprobe is unavailable or returns incomplete values.
+- External media downloads now preserve yt-dlp width/height/duration metadata.
+- Non-MP4 downloads are remuxed to MP4 without re-encoding when the source codecs allow it.
+
+3) Auto Update video transfer
+- Auto Update now uses the same configured download retry count as normal Save Restricted.
+- Video files delivered by Telegram as video Documents are sent through the video pipeline.
+- Mixed album media types are separated instead of attempting an invalid Telegram media group.
+- If a grouped upload fails, fallback uploads reuse the already downloaded files instead of downloading the album again.
+
+4) Bandwidth waste reduction
+- FloodWait now bubbles to the scheduler instead of triggering video->document fallback uploads.
+- Invalid saved thumbnails no longer trigger an unnecessary second full-size video upload.
+- Mixed albums no longer trigger a doomed group upload followed by a full re-download for individual fallback.
+
+No new required environment variables or dependencies.
+Important: Telegram file uploads still consume Render outbound bandwidth. These changes reduce avoidable duplicate transfers but cannot remove the bandwidth inherently required to upload media to Telegram.

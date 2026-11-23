@@ -255,11 +255,6 @@ async def _generate_auto_video_thumbnail(video, duration, user_id, use_saved_thu
     out = None
     thumbnail_created = False
     try:
-        # Prefer a user-saved video thumbnail when one exists.
-        saved = load_saved_thumbnail(user_id, "video") if use_saved_thumbnail else None
-        if saved and os.path.isfile(saved) and os.path.getsize(saved) > 0:
-            return saved, False
-
         ffmpeg_bin = shutil.which("ffmpeg")
         if not ffmpeg_bin:
             try:
@@ -277,7 +272,7 @@ async def _generate_auto_video_thumbnail(video, duration, user_id, use_saved_thu
             ffmpeg_bin, "-hide_banner", "-loglevel", "error",
             "-ss", str(seek), "-i", str(video),
             "-frames:v", "1",
-            "-vf", "scale=if(gt(iw,ih),320,-2):if(gt(ih,iw),320,-2)",
+            "-vf", "scale=320:320:force_original_aspect_ratio=decrease",
             "-q:v", "5", "-y", out
         ]
         proc = await asyncio.create_subprocess_exec(
@@ -348,6 +343,16 @@ async def _prepare_video_upload(userbot, msg, file, user_id):
             "height": getattr(source_video, "height", 0) or 0,
             "duration": getattr(source_video, "duration", 0) or 0,
         }
+        if not any(source_metadata.values()):
+            # Telegram sometimes delivers MP4/MOV media as a Document with
+            # DocumentAttributeVideo rather than message.video.
+            for attribute in (getattr(getattr(msg, "document", None), "attributes", None) or []):
+                width = getattr(attribute, "w", None) or getattr(attribute, "width", None) or 0
+                height = getattr(attribute, "h", None) or getattr(attribute, "height", None) or 0
+                duration = getattr(attribute, "duration", None) or 0
+                if width or height or duration:
+                    source_metadata = {"width": width, "height": height, "duration": duration}
+                    break
         metadata = await video_metadata_async(
             file,
             timeout=PRE_UPLOAD_TIMEOUT,
@@ -373,12 +378,13 @@ async def _transfer_with_retries(factory, edit, label, retries=None):
     for attempt in range(1, max(1, retries) + 1):
         try:
             return await run_transfer_with_watchdog(factory(), progress_message=edit)
-        except FloodWait as fw:
-            last_error = fw
-            if attempt >= retries:
-                raise
-            await edit.edit(f"⏳ **Telegram rate limit**\n\nPausing for `{fw.value}` seconds...\n🔁 Retry `{attempt}/{retries - 1}`")
-            await asyncio.sleep(fw.value)
+        except FloodWait:
+            # Let the batch/Auto Update scheduler own the pause. Sleeping here
+            # is inside FILE_TASK_TIMEOUT and can turn a valid FloodWait into a
+            # false failed file when Telegram's wait exceeds the per-file limit.
+            # Bubbling it up also prevents a large video from being re-uploaded
+            # through fallback routes during the same rate limit.
+            raise
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
@@ -585,12 +591,21 @@ async def upload_video_resilient(target_chat_id, file, caption, edit, user_id, w
     forward_targets = target_chat_id if isinstance(target_chat_id, (list, tuple, set)) else ([target_chat_id] if target_chat_id is not None else [])
     errors=[]; first_sent=None; auto_thumb=None
     saved_thumb=load_saved_thumbnail(user_id,"video") if use_saved_thumbnail else None
+    thumb = None
+    is_temp = False
     if saved_thumb and os.path.isfile(saved_thumb) and os.path.getsize(saved_thumb)>0:
-        normalized=await _normalize_thumbnail(saved_thumb,user_id); thumb=normalized or saved_thumb; is_temp=bool(normalized)
-    elif source_thumb and os.path.isfile(source_thumb) and os.path.getsize(source_thumb)>0:
-        thumb=source_thumb; is_temp=True
-    else:
-        thumb,is_temp=await _generate_auto_video_thumbnail(file,duration,user_id,use_saved_thumbnail=use_saved_thumbnail)
+        # Never try an unnormalized saved thumbnail: Telegram may reject it
+        # after receiving the large video payload, causing a wasteful full
+        # video re-upload without a thumbnail.
+        thumb = await _normalize_thumbnail(saved_thumb, user_id)
+        is_temp = bool(thumb)
+    if not thumb and source_thumb and os.path.isfile(source_thumb) and os.path.getsize(source_thumb)>0:
+        thumb = source_thumb
+        is_temp = True
+    if not thumb:
+        thumb, is_temp = await _generate_auto_video_thumbnail(
+            file, duration, user_id, use_saved_thumbnail=use_saved_thumbnail
+        )
     auto_thumb=thumb if is_temp else None
     try:
         base=dict(chat_id=(upload_chat_id if upload_chat_id is not None else user_id),video=file,supports_streaming=True,progress=progress_bar,progress_args=("**UPLOADING:**\n",edit,time.time()),**_caption_send_kwargs(caption))
@@ -606,12 +621,14 @@ async def upload_video_resilient(target_chat_id, file, caption, edit, user_id, w
                 kw=dict(base); kw["thumb"]=thumb
                 sent=await _transfer_with_retries(lambda kw=kw: app.send_video(**kw),edit,"video with thumbnail",retries=3)
             except asyncio.CancelledError: raise
+            except FloodWait: raise
             except asyncio.TimeoutError:
                 raise
             except Exception as e: errors.append(f"thumbnail upload: {e}")
         if sent is None:
             try: sent=await _transfer_with_retries(lambda base=base: app.send_video(**base),edit,"video upload",retries=3)
             except asyncio.CancelledError: raise
+            except FloodWait: raise
             except asyncio.TimeoutError:
                 raise
             except Exception as e: errors.append(f"video upload: {e}")
@@ -620,6 +637,7 @@ async def upload_video_resilient(target_chat_id, file, caption, edit, user_id, w
                 fallback_chat_id = upload_chat_id if upload_chat_id is not None else user_id
                 sent=await _transfer_with_retries(lambda: app.send_document(chat_id=fallback_chat_id,document=file,progress=progress_bar,progress_args=("**UPLOADING FILE:**\n",edit,time.time()),**_caption_send_kwargs(caption)),edit,"document fallback",retries=2)
             except asyncio.CancelledError: raise
+            except FloodWait: raise
             except asyncio.TimeoutError:
                 raise
             except Exception as e: errors.append(f"document fallback: {e}")
@@ -651,6 +669,7 @@ async def upload_audio_resilient(target_chat_id, file, caption, edit, user_id, d
     sent=None
     try: sent=await _transfer_with_retries(lambda base=base: app.send_audio(**base),edit,"audio upload",retries=3)
     except asyncio.CancelledError: raise
+    except FloodWait: raise
     except asyncio.TimeoutError:
         raise
     except Exception as e: errors.append(f"audio: {e}")
@@ -659,6 +678,7 @@ async def upload_audio_resilient(target_chat_id, file, caption, edit, user_id, d
             kw=dict(base); kw["thumb"]=thumb
             sent=await _transfer_with_retries(lambda kw=kw: app.send_audio(**kw),edit,"audio with thumbnail",retries=2)
         except asyncio.CancelledError: raise
+        except FloodWait: raise
         except asyncio.TimeoutError:
             raise
         except Exception as e: errors.append(f"audio thumb: {e}")
@@ -686,12 +706,14 @@ async def upload_document_resilient(target_chat_id, file, caption, edit, user_id
             kw=dict(base); kw["thumb"]=thumb
             sent=await _transfer_with_retries(lambda kw=kw: app.send_document(**kw),edit,"document with thumbnail",retries=2)
         except asyncio.CancelledError: raise
+        except FloodWait: raise
         except asyncio.TimeoutError:
             raise
         except Exception as e: errors.append(f"thumb: {e}")
     if sent is None:
         try: sent=await _transfer_with_retries(lambda base=base: app.send_document(**base),edit,"document upload",retries=3)
         except asyncio.CancelledError: raise
+        except FloodWait: raise
         except asyncio.TimeoutError:
             raise
         except Exception as e: errors.append(f"document: {e}")

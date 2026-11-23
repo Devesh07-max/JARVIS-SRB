@@ -8,6 +8,7 @@ import asyncio
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 import uuid
@@ -125,11 +126,16 @@ def _extract_info(url):
         raise RuntimeError("This link did not return downloadable media.")
     if info.get("_type") in ("playlist", "multi_video"):
         raise RuntimeError("Playlist links are not supported yet. Please send one video/post link at a time.")
+    formats = info.get("formats") or []
+    video_formats = [item for item in formats if item.get("vcodec") != "none"]
+    best_video = max(video_formats, key=lambda item: int(item.get("height") or 0), default={})
     return {
         "title": str(info.get("title") or "Downloaded media")[:180],
         "duration": info.get("duration"),
+        "width": info.get("width") or best_video.get("width") or 0,
+        "height": info.get("height") or best_video.get("height") or 0,
         "extractor": str(info.get("extractor_key") or info.get("extractor") or "Media platform"),
-        "formats": info.get("formats") or [],
+        "formats": formats,
         "webpage_url": info.get("webpage_url") or url,
         "thumbnail": info.get("thumbnail"),
     }
@@ -185,6 +191,42 @@ def _download(url, fmt, output_dir, audio=False, progress_hook=None):
     if not files:
         raise RuntimeError("The platform did not produce a downloadable file.")
     return max(files, key=lambda p: p.stat().st_mtime)
+
+
+def _remux_video_to_mp4(path):
+    """Remux a downloaded video into an MP4 container without re-encoding.
+
+    This preserves the original video/audio quality while improving Telegram
+    video playback, duration probing and thumbnail support. If the source
+    codecs cannot be placed in MP4, keep the original file unchanged.
+    """
+    source = Path(path)
+    if source.suffix.lower() in (".mp4", ".m4v"):
+        return source
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        try:
+            import imageio_ffmpeg
+            ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return source
+    output = source.with_name(source.stem + ".jarvis.mp4")
+    command = [
+        ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(source), "-map", "0:v:0", "-map", "0:a?",
+        "-c", "copy", "-movflags", "+faststart", "-f", "mp4", str(output),
+    ]
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+        if result.returncode == 0 and output.is_file() and output.stat().st_size > 0:
+            return output
+    except Exception as exc:
+        print(f"Video MP4 remux skipped: {exc}")
+    try:
+        output.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return source
 
 
 def _session_for(user_id, key):
@@ -322,6 +364,8 @@ async def download_selected_media(_, query):
             asyncio.to_thread(_download, session["url"], fmt, work_dir, audio, hook),
             timeout=MEDIA_DOWNLOAD_TIMEOUT,
         )
+        if not audio and path.suffix.lower() not in (".mp4", ".m4v"):
+            path = await asyncio.to_thread(_remux_video_to_mp4, path)
         size = path.stat().st_size
         if size > 1_950 * 1024 * 1024:
             raise RuntimeError("This file is too large to send through the current Telegram bot upload route.")
@@ -335,10 +379,12 @@ async def download_selected_media(_, query):
             await upload_audio_resilient([], str(path), caption, status, query.from_user.id,
                 duration=int(session["info"].get("duration") or 0), title=session["info"]["title"][:64],
                 upload_chat_id=query.from_user.id)
-        elif path.suffix.lower() in (".mp4", ".m4v", ".mov", ".webm"):
+        elif path.suffix.lower() in (".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".flv", ".ts"):
             metadata = await asyncio.wait_for(
                 video_metadata_async(str(path), timeout=PRE_UPLOAD_TIMEOUT, fallback={
-                    "width": 0, "height": 0, "duration": int(session["info"].get("duration") or 0),
+                    "width": int(session["info"].get("width") or 0),
+                    "height": int(session["info"].get("height") or 0),
+                    "duration": int(round(float(session["info"].get("duration") or 0))),
                 }), timeout=PRE_UPLOAD_TIMEOUT,
             )
             await upload_video_resilient([], str(path), caption, status, query.from_user.id,

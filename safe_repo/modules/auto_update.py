@@ -27,7 +27,7 @@ from telethon import events
 from telethon.tl.custom import Button
 from motor.motor_asyncio import AsyncIOMotorClient
 
-from config import API_ID, API_HASH, MONGO_DB, MONGO_DATABASE_NAME
+from config import API_ID, API_HASH, MONGO_DB, MONGO_DATABASE_NAME, TRANSFER_RETRIES
 from safe_repo import app, sex as gf
 from safe_repo.core import get_func as srb_pipeline
 from safe_repo.core.download_utils import download_media_resilient
@@ -549,6 +549,15 @@ async def _customized_payload(owner_id, message):
     return filename, caption
 
 
+def _is_video_document(message):
+    document = getattr(message, "document", None)
+    if not document:
+        return False
+    mime = (getattr(document, "mime_type", None) or "").casefold()
+    filename = (getattr(document, "file_name", None) or "").casefold()
+    return mime.startswith("video/") or filename.endswith((".mp4", ".m4v", ".mov", ".webm", ".mkv"))
+
+
 def _media_kind(message):
     if getattr(message, "photo", None):
         return "photos"
@@ -804,7 +813,7 @@ async def _upload_media(user, pair, message, ctx):
                 progress_args=(ctx, "⬇ Downloading"),
                 progress_message=ctx.get("message") if ctx else None,
                 user_id=pair.get("owner_id"),
-                retries=1,
+                retries=TRANSFER_RETRIES,
             )
             if not downloaded_path or not os.path.isfile(downloaded_path):
                 raise RuntimeError("Telegram returned no downloaded file")
@@ -834,7 +843,9 @@ async def _upload_media(user, pair, message, ctx):
             elif getattr(message, "animation", None):
                 sent = await app.send_animation(pair["target_id"], path, caption=caption,
                     parse_mode=ParseMode.DISABLED, **upload_progress)
-            elif getattr(message, "video", None):
+            elif getattr(message, "video", None) or _is_video_document(message):
+                # Video documents must use send_video (not send_document) too,
+                # otherwise Telegram displays them as files without a timeline.
                 # Match normal Save Restricted processing: ffprobe metadata,
                 # source/saved/generated thumbnail, retry/watchdog upload and
                 # document fallback. Upload directly to this Auto Update pair's target.
@@ -885,6 +896,71 @@ async def _upload_media(user, pair, message, ctx):
     return "success"
 
 
+async def _upload_pre_downloaded_album_item(pair, item, path, caption, ctx):
+    """Publish an already-downloaded album item without downloading it again."""
+    owner_id = int(pair["owner_id"])
+    kind = _media_kind(item)
+    try:
+        if kind == "videos":
+            source_video = getattr(item, "video", None)
+            fallback = {
+                "width": getattr(source_video, "width", 0) or 0,
+                "height": getattr(source_video, "height", 0) or 0,
+                "duration": getattr(source_video, "duration", 0) or 0,
+            }
+            if not any(fallback.values()):
+                for attribute in (getattr(getattr(item, "document", None), "attributes", None) or []):
+                    width = getattr(attribute, "w", None) or 0
+                    height = getattr(attribute, "h", None) or 0
+                    duration = getattr(attribute, "duration", None) or 0
+                    if width or height or duration:
+                        fallback = {"width": width, "height": height, "duration": duration}
+                        break
+            metadata = await srb_pipeline.video_metadata_async(
+                str(path), timeout=srb_pipeline.PRE_UPLOAD_TIMEOUT, fallback=fallback
+            )
+            sent = await srb_pipeline.upload_video_resilient(
+                [], str(path), caption, ctx["message"], owner_id,
+                metadata.get("width") or 0, metadata.get("height") or 0,
+                metadata.get("duration") or 0, upload_chat_id=pair["target_id"],
+            )
+        elif kind == "photos":
+            sent = await srb_pipeline.upload_photo_resilient(
+                [], str(path), caption, ctx["message"], owner_id,
+                upload_chat_id=pair["target_id"],
+            )
+        elif kind == "audio":
+            audio = getattr(item, "audio", None)
+            sent = await srb_pipeline.upload_audio_resilient(
+                [], str(path), caption, ctx["message"], owner_id,
+                duration=getattr(audio, "duration", 0) or 0,
+                performer=getattr(audio, "performer", None),
+                title=getattr(audio, "title", None),
+                upload_chat_id=pair["target_id"],
+            )
+        else:
+            sent = await srb_pipeline.upload_document_resilient(
+                [], str(path), caption, ctx["message"], owner_id,
+                upload_chat_id=pair["target_id"],
+            )
+        if sent is None:
+            raise RuntimeError("Telegram did not confirm the album item upload")
+        await _record_transfer(pair, item.id, "success", f"{kind} uploaded from cached album download",
+                               target_message_id=getattr(sent, "id", None))
+        await _mark_cursor(pair, item.id, "success")
+        await _log(pair, "success", item.id, f"{kind} uploaded using cached album download")
+        await _finish_progress(ctx, "✅ Upload completed · 100%")
+        return True
+    except FloodWait:
+        raise
+    except Exception as exc:
+        await _handle_file_failure(pair, item, f"Cached album upload failed: {exc}", ctx, "upload_failed")
+        row = await transfers_col.find_one({
+            "pair_id": pair["pair_id"], "source_message_id": int(item.id)
+        }) or {}
+        return row.get("status") == "skipped"
+
+
 async def _upload_album(user, pair, album, queue_start, queue_total, ctx=None):
     """Keep supported albums grouped; Pyrogram's send_media_group has no upload callback."""
     allowed = [(_filter_reason(pair, item) is None and _media_kind(item) in DEFAULT_FILTERS) for item in album]
@@ -905,10 +981,19 @@ async def _upload_album(user, pair, album, queue_start, queue_total, ctx=None):
             await asyncio.sleep(INTER_FILE_DELAY)
         return True
 
-    album_kind_ok = all(
-        getattr(item, "photo", None) or getattr(item, "video", None) or getattr(item, "document", None)
-        or getattr(item, "audio", None) for item in album
-    )
+    def _album_api_kind(item):
+        if getattr(item, "photo", None) or getattr(item, "video", None) or _is_video_document(item):
+            return "visual"
+        if getattr(item, "audio", None):
+            return "audio"
+        if getattr(item, "document", None):
+            return "document"
+        return None
+
+    # Telegram media groups cannot mix arbitrary media classes. Split mixed
+    # albums into individual transfers instead of issuing a doomed group upload.
+    album_api_kinds = [_album_api_kind(item) for item in album]
+    album_kind_ok = all(album_api_kinds) and len(set(album_api_kinds)) == 1
     if not album_kind_ok:
         for index, item in enumerate(album):
             if ctx is None:
@@ -963,7 +1048,7 @@ async def _upload_album(user, pair, album, queue_start, queue_total, ctx=None):
         await _record_transfer(pair, item.id, "processing", "Album transfer started", album_id=album_id)
 
     with tempfile.TemporaryDirectory(prefix="jarvis_auto_album_") as tmp:
-        media, source_paths = [], []
+        media, source_paths, captions_by_id = [], [], {}
         for index, item in enumerate(album):
             if ctx is None:
                 ctx = await _create_progress(pair["owner_id"], pair, queue_start + index, queue_total, item)
@@ -972,13 +1057,14 @@ async def _upload_album(user, pair, album, queue_start, queue_total, ctx=None):
             try:
                 await _set_progress(ctx, f"⬇ Downloading album item {index + 1}/{len(album)}", force=True)
                 item_filename, item_caption = await _customized_payload(pair["owner_id"], item)
+                captions_by_id[int(item.id)] = item_caption
                 path = await download_media_resilient(
                     user, item,
                     progress=_transfer_progress,
                     progress_args=(ctx, "⬇ Downloading"),
                     progress_message=ctx.get("message") if ctx else None,
                     user_id=pair.get("owner_id"),
-                    retries=1,
+                    retries=TRANSFER_RETRIES,
                 )
                 if not path or not os.path.isfile(path) or os.path.getsize(path) <= 0:
                     raise RuntimeError(f"Download returned no valid file for message {item.id}")
@@ -1017,9 +1103,15 @@ async def _upload_album(user, pair, album, queue_start, queue_total, ctx=None):
             _, caption = await _customized_payload(pair["owner_id"], item)
             if getattr(item, "photo", None):
                 media.append(InputMediaPhoto(path, caption=caption, parse_mode=ParseMode.DISABLED))
-            elif getattr(item, "video", None):
-                media.append(InputMediaVideo(path, caption=caption, parse_mode=ParseMode.DISABLED,
-                    supports_streaming=bool(item.video.supports_streaming)))
+            elif getattr(item, "video", None) or _is_video_document(item):
+                source_video = getattr(item, "video", None)
+                media.append(InputMediaVideo(
+                    path, caption=caption, parse_mode=ParseMode.DISABLED,
+                    supports_streaming=bool(getattr(source_video, "supports_streaming", True)),
+                    width=getattr(source_video, "width", 0) or 0,
+                    height=getattr(source_video, "height", 0) or 0,
+                    duration=getattr(source_video, "duration", 0) or 0,
+                ))
             elif getattr(item, "audio", None):
                 media.append(InputMediaAudio(path, caption=caption, parse_mode=ParseMode.DISABLED,
                     title=getattr(item.audio, "title", None), performer=getattr(item.audio, "performer", None)))
@@ -1041,19 +1133,16 @@ async def _upload_album(user, pair, album, queue_start, queue_total, ctx=None):
             # If Telegram rejects the grouped upload, fall back to the exact
             # per-file Save Restricted upload pipeline. This also gives each
             # failed item its own bounded retries and Skip/Retry choice.
-            for index, item in enumerate(album):
+            for index, (item, local_path) in enumerate(zip(album, source_paths)):
                 if ctx is None:
                     ctx = await _create_progress(pair["owner_id"], pair, queue_start + index, queue_total, item)
                 else:
                     await _reuse_progress(ctx, queue_start + index, queue_total, item)
-                try:
-                    await _upload_media(user, pair, item, ctx)
-                except TransferRetry:
-                    row = await transfers_col.find_one({"pair_id": pair["pair_id"], "source_message_id": int(item.id)}) or {}
-                    if row.get("status") != "skipped":
-                        return False
-                except FloodWait:
-                    raise
+                ok = await _upload_pre_downloaded_album_item(
+                    pair, item, local_path, captions_by_id.get(int(item.id), ""), ctx
+                )
+                if not ok:
+                    return False
                 await asyncio.sleep(INTER_FILE_DELAY)
             return True
 

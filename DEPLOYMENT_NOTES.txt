@@ -23,7 +23,7 @@ JARVIS SRB upgrade notes
 
 - External media downloader: yt-dlp is installed from requirements.txt. Dockerfile installs ffmpeg for MP4 merging and MP3 extraction. Send a supported public media URL directly to the bot; Telegram message links continue through the original Telegram pipeline.
 - /dlbots: requires the user's own Telegram session created with /login. It lists accessible bot chats and recent media messages only. Protected-content restrictions are not bypassed.
-- FloodWait: long waits pause the current batch file and show a Resume Download button after the timer. If the process restarts during a pause, the bot reports the interrupted Telegram link instead of claiming the batch resumed.
+- FloodWait: the batch now pauses automatically, tells the user the exact wait in seconds, then retries the same current file and continues without a Resume button. If Render restarts during the pause, the bot reports the in-flight and remaining links rather than risking duplicate uploads.
 - Forward destinations: manage saved channels under /customisations -> Forward Chat ID. Reset Customisation leaves the saved channel list and selected destination untouched.
 - PayPal: configure PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET. Use https://api-m.sandbox.paypal.com for sandbox tests; set PAYPAL_BASE_URL=https://api-m.paypal.com for live payments. PayPal is USD-priced using the existing plan USD prices. Never commit credentials.
 

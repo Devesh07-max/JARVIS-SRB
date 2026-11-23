@@ -523,12 +523,32 @@ async def video_metadata_async(file, timeout=30, fallback=None):
         'duration': _positive_int(fallback.get('duration')),
     }
     default_values = fallback_values
+    def _opencv_probe():
+        capture = cv2.VideoCapture(str(file))
+        try:
+            if not capture.isOpened():
+                return {}
+            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+            frames = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            duration = int(round(frames / fps)) if fps > 0 and frames > 0 else 0
+            return {"width": width, "height": height, "duration": duration}
+        finally:
+            capture.release()
+
     ffprobe_bin = shutil.which("ffprobe")
     if not ffprobe_bin:
-        # The Docker image installs ffmpeg (and therefore ffprobe).  If a
-        # custom runtime omits it, the caller can still use Telegram's source
-        # metadata rather than uploading a false one-second duration.
-        return default_values
+        try:
+            probed = await asyncio.wait_for(asyncio.to_thread(_opencv_probe), timeout=max(1, float(timeout)))
+            return {
+                "width": probed.get("width") or default_values["width"],
+                "height": probed.get("height") or default_values["height"],
+                "duration": probed.get("duration") or default_values["duration"],
+            }
+        except Exception as exc:
+            print(f"OpenCV video metadata fallback failed: {exc}")
+            return default_values
 
     proc = None
     try:
@@ -565,11 +585,22 @@ async def video_metadata_async(file, timeout=30, fallback=None):
             float(fallback_values["duration"]),
         ]
         duration = int(round(max(durations))) if any(durations) else fallback_values["duration"]
-        return {
+        result = {
             "width": max(0, width),
             "height": max(0, height),
             "duration": max(0, duration),
         }
+        if not all(result.values()):
+            try:
+                probed = await asyncio.wait_for(
+                    asyncio.to_thread(_opencv_probe), timeout=max(1, float(timeout))
+                )
+                result["width"] = result["width"] or probed.get("width", 0) or fallback_values["width"]
+                result["height"] = result["height"] or probed.get("height", 0) or fallback_values["height"]
+                result["duration"] = result["duration"] or probed.get("duration", 0) or fallback_values["duration"]
+            except Exception as exc:
+                print(f"OpenCV metadata fallback failed: {exc}")
+        return result
     except asyncio.CancelledError:
         if proc is not None and proc.returncode is None:
             try:

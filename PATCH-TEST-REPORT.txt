@@ -1,0 +1,24 @@
+JARVIS-SRB PATCH TEST REPORT
+
+CODE-LEVEL TESTS
+- Python compileall: PASS for the extracted project.
+- FloodWait pause state stores the exact current link and message index: PASS.
+- Automatic wait and retry path is present; no manual resume click is required: PASS.
+- Batch cancellation / top-level error paths include unprocessed links in the final issue report: PASS.
+- Auto Update download retry count matches TRANSFER_RETRIES: PASS.
+- Video Documents route through the video upload path: PASS.
+- Mixed album media classes are not sent as one invalid group: PASS.
+- Album group fallback reuses downloaded local files: PASS.
+- FloodWait exceptions propagate out of media upload helpers to the scheduler: PASS.
+- Thumbnail scaling tested with landscape, portrait and square test videos: PASS.
+- ffprobe duration/dimensions test on 2-second videos: PASS.
+- MP4 remux test without re-encoding: PASS.
+
+NOT LIVE-TESTED
+- No Telegram credentials, user session, source/target channels or production MongoDB were available here.
+- Real Telegram FloodWait and batch continuation must be verified on the deployed bot.
+- Real Auto Update transfers and large-video uploads must be verified on the deployed bot.
+- Render bandwidth usage must be observed after deployment.
+
+BANDWIDTH LIMITATION
+Media must still be downloaded to the server and uploaded to Telegram in the current architecture. That traffic cannot be eliminated without changing the product architecture or reducing/transcoding media. This patch specifically removes avoidable duplicate uploads/downloads caused by FloodWait fallbacks, invalid thumbnails and incompatible album grouping.

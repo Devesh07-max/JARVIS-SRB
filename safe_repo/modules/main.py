@@ -464,16 +464,9 @@ async def _move_batch_progress_to_bottom(chat_id, progress_msg, text):
         return progress_msg
 
 
-BATCH_RESUME_EVENTS = {}
-BATCH_RESUME_READY = set()
-
-
 async def _pause_batch_for_floodwait(user_id, chat_id, progress_msg, wait_s, current_link, current_index, batch_end):
-    """Pause the active batch at the current file until FloodWait expires and the user resumes."""
+    """Persist and automatically resume the current batch item after FloodWait."""
     wait_s = max(0, int(wait_s or 0))
-    event = asyncio.Event()
-    BATCH_RESUME_EVENTS[user_id] = event
-    BATCH_RESUME_READY.discard(user_id)
     try:
         await db.update_one(
             {"_id": user_id},
@@ -489,48 +482,26 @@ async def _pause_batch_for_floodwait(user_id, chat_id, progress_msg, wait_s, cur
     except Exception as exc:
         print(f"Could not persist paused batch state for {user_id}: {exc}")
 
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("▶️ Resume Download", callback_data="batchresume")]])
     try:
         await progress_msg.edit_text(
-            "⏸️ **Batch paused because of Telegram FloodWait**\n\n"
+            "⏸️ **Batch automatically paused by Telegram FloodWait**\n\n"
             f"📄 Current file: `{current_index}`\n"
-            f"⏳ Please wait `{wait_s}` seconds. The current file will be retried, not skipped.\n\n"
-            "After the waiting time ends, tap **Resume Download** to continue from this file.",
-            reply_markup=keyboard,
+            f"⏳ Telegram has asked the bot to wait `{wait_s}` seconds.\n\n"
+            "The current file is retained. The bot will automatically retry it "
+            "after the wait and continue the remaining batch."
         )
     except Exception:
         pass
 
+    # Keep the same file index/link and resume without a manual button.
     await asyncio.sleep(wait_s + 1)
-    BATCH_RESUME_READY.add(user_id)
     try:
         await progress_msg.edit_text(
-            "⏸️ **FloodWait period finished**\n\n"
-            f"📄 Ready to retry file `{current_index}`.\n"
-            "Tap **Resume Download** to continue the batch.",
-            reply_markup=keyboard,
+            "▶️ **FloodWait finished — automatically resuming**\n\n"
+            f"📄 Retrying current file `{current_index}` now..."
         )
     except Exception:
         pass
-
-    try:
-        await asyncio.wait_for(event.wait(), timeout=24 * 60 * 60)
-    except asyncio.TimeoutError:
-        try:
-            await db.update_one({"_id": user_id}, {"$unset": {"paused_batch": ""}})
-        except Exception:
-            pass
-        return False
-    except asyncio.CancelledError:
-        try:
-            await db.update_one({"_id": user_id}, {"$unset": {"paused_batch": ""}})
-        except Exception:
-            pass
-        raise
-    finally:
-        BATCH_RESUME_EVENTS.pop(user_id, None)
-        BATCH_RESUME_READY.discard(user_id)
-
     try:
         await db.update_one({"_id": user_id}, {"$unset": {"paused_batch": ""}})
     except Exception as exc:
@@ -540,40 +511,50 @@ async def _pause_batch_for_floodwait(user_id, chat_id, progress_msg, wait_s, cur
 
 @app.on_callback_query(filters.regex(r"^batchresume$"))
 async def resume_paused_batch(_, query):
-    user_id = query.from_user.id
-    event = BATCH_RESUME_EVENTS.get(user_id)
-    if not event:
-        return await query.answer("This batch is no longer active. If the server restarted, send the failed link again.", show_alert=True)
-    if user_id not in BATCH_RESUME_READY:
-        state = await db.find_one({"_id": user_id}, {"paused_batch.wait_until": 1})
-        wait_until = ((state or {}).get("paused_batch") or {}).get("wait_until", int(time.time()))
-        remaining = max(1, int(wait_until) - int(time.time()))
-        return await query.answer(f"Please wait {remaining} more seconds before resuming.", show_alert=True)
-    event.set()
-    await query.answer("Resuming from the interrupted file...")
+    # Compatibility for old messages containing the former manual-resume button.
+    await query.answer("Automatic resume is enabled. No action is needed.", show_alert=True)
 
 
 async def recover_interrupted_batches():
-    """Notify users if a process restart interrupted an in-memory paused batch."""
+    """Report every remaining link if Render restarts during an active batch.
+
+    A Telegram upload may have reached the destination just before a process
+    restart, so the bot does not blindly replay the in-flight item and risk a
+    duplicate. It reports the in-flight item plus all later links instead.
+    """
     try:
         cursor = db.find({"paused_batch": {"$exists": True}})
         async for record in cursor:
             user_id = record.get("_id")
             state = record.get("paused_batch") or {}
-            link = state.get("current_link") or "(current Telegram link unavailable)"
+            link = state.get("current_link") or ""
+            current_index = int(state.get("current_index") or 0)
+            batch_end = int(state.get("batch_end") or current_index)
+            pending_links = []
+            if link and current_index:
+                base = link.rsplit("/", 1)[0]
+                for message_id in range(current_index, batch_end + 1):
+                    raw = f"{base}/{message_id}"
+                    pending_links.append(get_link(raw) or raw)
+            lines = "\n".join(f"• {item}" for item in pending_links[:60])
+            extra = f"\n…and `{len(pending_links) - 60}` more links." if len(pending_links) > 60 else ""
             try:
                 await app.send_message(
                     user_id,
                     "⚠️ **Batch interrupted by a server restart.**\n\n"
-                    "The bot could not safely restore the active Telegram transfer.\n"
-                    f"❌ File that was in progress: `{link}`\n\n"
-                    "Please resend this link or start a new batch. Files completed before the interruption are not repeated automatically."
+                    "The active transfer cannot be safely replayed automatically because "
+                    "Telegram may have accepted the last upload before the process stopped. "
+                    "To avoid duplicate uploads, the bot has not replayed it.\n\n"
+                    f"❌ Current and remaining links (`{len(pending_links)}`):\n"
+                    f"{lines or 'The saved current link is unavailable.'}{extra}\n\n"
+                    "You can resend only the links that still need processing."
                 )
             except Exception as exc:
                 print(f"Could not notify interrupted batch user {user_id}: {exc}")
             await db.update_one({"_id": user_id}, {"$unset": {"paused_batch": ""}})
     except Exception as exc:
         print(f"Interrupted batch recovery scan failed: {exc}")
+
 
 
 @app.on_message(filters.command("batch"))
@@ -597,6 +578,31 @@ async def batch_link(_, message):
         return
 
     userbot = None
+    current_index = None
+    current_link = ""
+    completed_index = 0
+    start_id = None
+    cs = None
+    cl = None
+
+    def add_remaining_batch_links():
+        """Add the in-flight and not-yet-started links to the final issue report."""
+        if cs is None or cl is None or not start_id:
+            return
+        if current_index is not None and current_index > completed_index and current_link:
+            already_ids = {mid for mid, _ in failed_links + skipped_links}
+            if current_index not in already_ids:
+                failed_links.append((current_index, current_link))
+            next_unprocessed = current_index + 1
+        else:
+            next_unprocessed = completed_index + 1
+        base_for_report = start_id.rsplit("/", 1)[0]
+        already_reported = {mid for mid, _ in failed_links + skipped_links}
+        for pending_id in range(max(cs, next_unprocessed), cl + 1):
+            if pending_id in already_reported:
+                continue
+            raw = f"{base_for_report}/{pending_id}"
+            skipped_links.append((pending_id, get_link(raw) or raw))
 
     start = await app.ask(message.chat.id, text="╭━━━〔 1️⃣ 𝗦𝗧𝗔𝗥𝗧 𝗟𝗜𝗡𝗞 〕━━━╮\n\nSend the first Telegram message link.\n\n💡 Example: `https://t.me/channel/100`\n╰━━━━━━━━━━━━━━━━━━━━╯")
     start_id = get_link(start.text or "")
@@ -735,6 +741,7 @@ async def batch_link(_, message):
                 else:
                     skipped += 1
                     skipped_links.append((i, link))
+                completed_index = i
                 # The current file has completely finished (or was skipped/failed).
                 # Move the progress message to the bottom before starting the next
                 # file. This keeps the batch strictly sequential while avoiding
@@ -763,6 +770,7 @@ async def batch_link(_, message):
                 failed += 1
                 await increment("download_failed")
                 failed_links.append((i, link))
+                completed_index = i
                 if i < cl and users_loop.get(user_id, False) and user_id not in cancel_requested:
                     progress_msg = await _move_batch_progress_to_bottom(
                         message.chat.id, progress_msg,
@@ -772,6 +780,7 @@ async def batch_link(_, message):
             except asyncio.TimeoutError:
                 skipped += 1
                 skipped_links.append((i, link))
+                completed_index = i
                 try:
                     await progress_msg.edit_text(
                         f"⏭️ **Message `{i}` timed out** after `{FILE_TASK_TIMEOUT}` seconds.\n\nSkipping it and continuing with the next file."
@@ -791,6 +800,7 @@ async def batch_link(_, message):
                 failed += 1
                 await increment("download_failed")
                 failed_links.append((i, link))
+                completed_index = i
                 try:
                     await progress_msg.edit_text(
                         f"⚠️ **Message `{i}` failed.**\n\nSkipping it and continuing with the next file.\n\n"
@@ -853,6 +863,9 @@ async def batch_link(_, message):
             )
         except Exception:
             pass
+        # Include the in-flight item and every item that had not started yet.
+        add_remaining_batch_links()
+        await _send_batch_issue_links(message.chat.id, failed_links, skipped_links)
         raise
     except FloodWait as fw:
         wait_s = int(getattr(fw, "value", 0) or 0)
@@ -863,6 +876,8 @@ async def batch_link(_, message):
             "Please try again later."
         )
         print(f"Batch FloodWait for user {user_id}: {wait_s}s")
+        add_remaining_batch_links()
+        await _send_batch_issue_links(message.chat.id, failed_links, skipped_links)
     except Exception as e:
         print(f"Batch error for user {user_id}: {e}")
         await app.send_message(
@@ -870,6 +885,8 @@ async def batch_link(_, message):
             "❌ **Batch could not continue.**\n\n"
             "The technical error was recorded in the server logs. Please try again."
         )
+        add_remaining_batch_links()
+        await _send_batch_issue_links(message.chat.id, failed_links, skipped_links)
     finally:
         users_loop.pop(user_id, None)
         active_tasks.pop(user_id, None)
