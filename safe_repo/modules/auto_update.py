@@ -47,7 +47,8 @@ DEFAULT_FILTERS = {
     "audio": True,
     "apk": True,
 }
-POLL_INTERVAL = max(5, int(os.getenv("AUTO_UPDATE_POLL_INTERVAL", "10")))
+POLL_INTERVAL = max(3600, int(os.getenv("AUTO_UPDATE_POLL_INTERVAL", "3600")))
+AUTO_UPDATE_TASKS = {}
 INTER_FILE_DELAY = 0.5
 MAX_MESSAGES_PER_PAIR_PER_CYCLE = 25
 RETRY_DELAYS = (5, 15, 30, 60, 120, 300, 600)
@@ -1294,6 +1295,14 @@ async def _poll_pair(pair):
     owner_id = int(pair["owner_id"])
     user = await _get_user_client(owner_id)
     cursor = int(pair.get("last_processed_message_id", 0))
+    # Cheap idle check: fetch only the latest post before walking source history.
+    # Previously every poll walked history even when there were no new messages.
+    latest_message = None
+    async for latest_message in user.get_chat_history(pair["source_id"], limit=1):
+        break
+    if latest_message is None or int(latest_message.id) <= cursor:
+        await _send_auto_skipped_report(user, pair)
+        return
     pending = []
     # Pyrogram yields newest-first. Walk back only as far as the durable cursor,
     # then process oldest-first so a failed file never gets jumped over.
@@ -1363,8 +1372,19 @@ async def auto_update_worker():
             await _ensure_indexes()
             pairs = await pairs_col.find({"enabled": True}).to_list(length=500)
             for pair in pairs:
+                owner_id = int(pair.get("owner_id", 0))
+                pair_task = asyncio.create_task(_poll_pair(pair), name=f"jarvis-auto-update-{pair.get('pair_id')}")
+                AUTO_UPDATE_TASKS[owner_id] = pair_task
                 try:
-                    await _poll_pair(pair)
+                    await pair_task
+                except asyncio.CancelledError:
+                    # Do not swallow cancellation of the background worker itself
+                    # (e.g. shutdown); only a cancelled pair task is user /cancel.
+                    if asyncio.current_task().cancelling():
+                        raise
+                    # A user cancelled only this owner's active pair; keep the
+                    # background worker alive for other configured pairs.
+                    continue
                 except FloodWait as exc:
                     seconds = int(getattr(exc, "value", 1) or 1)
                     # FloodWait can also happen while reading history. Keep the
@@ -1373,6 +1393,9 @@ async def auto_update_worker():
                 except Exception as exc:
                     await _retry_later(pair, None, exc, "failed")
                     print(f"Auto Update pair {pair.get('pair_id')} error: {exc}")
+                finally:
+                    if AUTO_UPDATE_TASKS.get(owner_id) is pair_task:
+                        AUTO_UPDATE_TASKS.pop(owner_id, None)
         except Exception as exc:
             print(f"Auto Update worker error: {exc}")
         await asyncio.sleep(POLL_INTERVAL)

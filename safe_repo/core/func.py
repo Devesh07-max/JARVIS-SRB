@@ -115,6 +115,10 @@ async def gen_link(app,chat_id):
    return link
 
 async def subscribe(app, message):
+    # Channel posts and anonymous-admin/service messages have no sender user;
+    # force-subscribe applies only to private/user-originated requests.
+    if not getattr(message, "from_user", None):
+        return 0
     # Owner is never blocked by force-subscribe. This also prevents the old
     # repository channel from appearing for the owner.
     if message.from_user and message.from_user.id in OWNER_ID:

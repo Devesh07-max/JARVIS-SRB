@@ -33,6 +33,8 @@ from safe_repo.core.mongo import users_db
 URL_RE = re.compile(r"https?://[^\s<>]+", re.I)
 TELEGRAM_HOSTS = {"t.me", "www.t.me", "telegram.me", "www.telegram.me"}
 SESSIONS = {}
+MEDIA_TASKS = {}
+ACTIVE_MEDIA_SESSIONS = {}
 SESSION_TTL_SECONDS = 20 * 60
 
 
@@ -201,8 +203,8 @@ def _remux_video_to_mp4(path):
     codecs cannot be placed in MP4, keep the original file unchanged.
     """
     source = Path(path)
-    if source.suffix.lower() in (".mp4", ".m4v"):
-        return source
+    # Remux MP4/M4V too: social platforms may provide a container whose index
+    # or metadata is not accepted by gallery players. Stream-copy avoids re-encode.
     ffmpeg_bin = shutil.which("ffmpeg")
     if not ffmpeg_bin:
         try:
@@ -222,6 +224,26 @@ def _remux_video_to_mp4(path):
             return output
     except Exception as exc:
         print(f"Video MP4 remux skipped: {exc}")
+    try:
+        output.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    # If stream-copy cannot produce a gallery-compatible MP4 (e.g. unsupported
+    # codec/container combination), use a compatibility encode as a last resort.
+    fallback_command = [
+        ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(source), "-map", "0:v:0", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", "-f", "mp4", str(output),
+    ]
+    try:
+        result = subprocess.run(fallback_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
+        if result.returncode == 0 and output.is_file() and output.stat().st_size > 0:
+            return output
+    except Exception as exc:
+        print(f"Video compatibility encode skipped: {exc}")
     try:
         output.unlink(missing_ok=True)
     except OSError:
@@ -339,6 +361,8 @@ async def download_selected_media(_, query):
             pass
 
     def hook(data):
+        if session.get("cancel_requested"):
+            raise yt_dlp.utils.DownloadError("Download cancelled by /cancel")
         if not status or data.get("status") not in ("downloading", "finished"):
             return
         now = time.monotonic()
@@ -358,13 +382,17 @@ async def download_selected_media(_, query):
         except RuntimeError:
             pass
 
+    task = asyncio.current_task()
+    MEDIA_TASKS[query.from_user.id] = task
+    ACTIVE_MEDIA_SESSIONS[query.from_user.id] = session
+    session["cancel_requested"] = False
     try:
         audio = code.startswith("mp3:")
         path = await asyncio.wait_for(
             asyncio.to_thread(_download, session["url"], fmt, work_dir, audio, hook),
             timeout=MEDIA_DOWNLOAD_TIMEOUT,
         )
-        if not audio and path.suffix.lower() not in (".mp4", ".m4v"):
+        if not audio:
             path = await asyncio.to_thread(_remux_video_to_mp4, path)
         size = path.stat().st_size
         if size > 1_950 * 1024 * 1024:
@@ -409,6 +437,13 @@ async def download_selected_media(_, query):
             if remaining == 0:
                 await app.send_message(query.from_user.id, "🎁 **Your shared free uses are finished.**\nUse /buypremium to continue.")
         await status.edit_text("✅ **Media sent successfully.**")
+    except asyncio.CancelledError:
+        session["cancel_requested"] = True
+        try:
+            await status.edit_text("⛔ **Media download cancelled by /cancel.**")
+        except Exception:
+            pass
+        raise
     except asyncio.TimeoutError:
         await status.edit_text("⌛ **Download timed out.**\n\nTry a lower quality or another link.")
     except FloodWait as fw:
@@ -417,5 +452,10 @@ async def download_selected_media(_, query):
     except Exception as exc:
         await status.edit_text(f"❌ **Download failed.**\n\n{_friendly_media_error(exc)}")
     finally:
+        session["cancel_requested"] = True
         SESSIONS.pop(key, None)
+        if MEDIA_TASKS.get(query.from_user.id) is task:
+            MEDIA_TASKS.pop(query.from_user.id, None)
+        if ACTIVE_MEDIA_SESSIONS.get(query.from_user.id) is session:
+            ACTIVE_MEDIA_SESSIONS.pop(query.from_user.id, None)
         shutil.rmtree(work_dir, ignore_errors=True)

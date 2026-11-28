@@ -162,6 +162,9 @@ async def single_link(_, message):
     "batch", "cancel", "reset", "earntokens", "add", "rem", "check", "stats", "gcast", "announce", "speedtest", "admincommands", "media", "dlbots", "autoupdate", "redeempremium"
 ]))
 async def direct_media(_, message):
+    # Direct-media intake is user-driven; ignore channel/anonymous-admin posts.
+    if not getattr(message, "from_user", None):
+        return
     user_id = message.chat.id
     try:
         await users_db.add_user(message.from_user)
@@ -942,33 +945,85 @@ async def reset_current_state(_, message):
 @app.on_message(filters.command("cancel"))
 async def stop_batch(_, message):
     user_id = message.chat.id
-    sessions_obj = None
+    cleared = []
+
+    # Clear pending Telegram-link/batch interaction state.
     try:
         from safe_repo.core.get_func import sessions as sessions_obj
+        sessions_obj.pop(user_id, None)
     except Exception:
         pass
-    if sessions_obj is not None and user_id in sessions_obj:
-        sessions_obj.pop(user_id, None)
     cancel_requested.add(user_id)
-    task = active_tasks.get(user_id)
-    if task and task is not asyncio.current_task():
-        users_loop.pop(user_id, None)
-        if not task.done():
-            task.cancel()
+    users_loop.pop(user_id, None)
+
+    # Stop the normal Telegram link/direct-media task, if one is active.
+    normal_task = active_tasks.get(user_id)
+    if normal_task and normal_task is not asyncio.current_task() and not normal_task.done():
+        normal_task.cancel()
+        cleared.append("link/batch")
+
+    # Stop social-media downloader work and clear its active selection.
+    try:
+        from safe_repo.modules.media_downloader import MEDIA_TASKS, ACTIVE_MEDIA_SESSIONS, SESSIONS as MEDIA_SESSIONS
+        media_session = ACTIVE_MEDIA_SESSIONS.get(user_id)
+        if media_session is not None:
+            media_session["cancel_requested"] = True
+        removed_media_selection = False
+        for key, media_session_item in list(MEDIA_SESSIONS.items()):
+            if media_session_item.get("user_id") == user_id:
+                media_session_item["cancel_requested"] = True
+                MEDIA_SESSIONS.pop(key, None)
+                removed_media_selection = True
+        if removed_media_selection and not media_session:
+            cleared.append("Media selection")
+        media_task = MEDIA_TASKS.get(user_id)
+        if media_task and media_task is not asyncio.current_task() and not media_task.done():
+            media_task.cancel()
+            cleared.append("Media Downloader")
+    except Exception as exc:
+        print(f"/cancel media cleanup error: {exc}")
+
+    # Stop DLBots transfer and clear its selected-file queue without closing login.
+    try:
+        from safe_repo.modules.dl_bots import DLBOT_TASKS, DLBOT_SESSIONS
+        dl_task = DLBOT_TASKS.get(user_id)
+        if dl_task and dl_task is not asyncio.current_task() and not dl_task.done():
+            dl_task.cancel()
+            cleared.append("DLBots")
+        dl_state = DLBOT_SESSIONS.get(user_id)
+        if dl_state:
+            if dl_state.get("selected_files") and not dl_task:
+                cleared.append("DLBots selection")
+            dl_state["selected_files"] = []
+            dl_state["busy"] = False
+    except Exception as exc:
+        print(f"/cancel DLBots cleanup error: {exc}")
+
+    # Cancel the currently-running Auto Update pair transfer for this owner only.
+    try:
+        from safe_repo.modules.auto_update import AUTO_UPDATE_TASKS
+        au_task = AUTO_UPDATE_TASKS.get(user_id)
+        if au_task and au_task is not asyncio.current_task() and not au_task.done():
+            au_task.cancel()
+            cleared.append("Auto Update transfer")
+    except Exception as exc:
+        print(f"/cancel Auto Update cleanup error: {exc}")
+
+    active_tasks.pop(user_id, None)
+    cancel_requested.discard(user_id)
+    if cleared:
         await app.send_message(
             message.chat.id,
             "╭━━━〔 ⛔ 𝗖𝗔𝗡𝗖𝗘𝗟 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘 〕━━━╮\n\n"
-            "🛑 The current file/batch operation was stopped.\n"
-            "🧹 Pending interaction state was cleared.\n\n"
-            "✅ Login, Premium and saved customisations were NOT changed.\n"
-            "You can start a fresh request now.\n"
+            "🛑 Stopped: " + ", ".join(cleared) + ".\n"
+            "🧹 Pending selections/queues cleared.\n\n"
+            "✅ Saved login, Premium and customisations remain unchanged.\n"
             "╰━━━━━━━━━━━━━━━━━━━━╯"
         )
-        return
-    if users_loop.get(user_id):
-        users_loop[user_id] = False
-        active_tasks.pop(user_id, None)
-        await app.send_message(message.chat.id, "╭━━━〔 ⛔ 𝗕𝗔𝗧𝗖𝗛 𝗖𝗔𝗡𝗖𝗘𝗟𝗟𝗘𝗗 〕━━━╮\n\nThe active batch has been stopped.\n🧹 Pending state cleared.\n\n✅ Saved login, Premium and customisations remain unchanged.\n╰━━━━━━━━━━━━━━━━━━━━╯")
-        return
-    cancel_requested.discard(user_id)
-    await app.send_message(message.chat.id, "╭━━━〔 ℹ️ 𝗡𝗢 𝗔𝗖𝗧𝗜𝗩𝗘 𝗧𝗔𝗦𝗞 〕━━━╮\n\nThere is no active download, upload or batch to cancel.\n╰━━━━━━━━━━━━━━━━━━━━╯")
+    else:
+        await app.send_message(
+            message.chat.id,
+            "╭━━━〔 ℹ️ 𝗡𝗢 𝗔𝗖𝗧𝗜𝗩𝗘 𝗧𝗔𝗦𝗞 〕━━━╮\n\n"
+            "There is no active download, upload, batch, Media Downloader, DLBots or Auto Update transfer to cancel.\n"
+            "╰━━━━━━━━━━━━━━━━━━━━╯"
+        )

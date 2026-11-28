@@ -31,6 +31,7 @@ from safe_repo.core.download_utils import download_media_resilient
 from safe_repo.core.log_utils import log_event, user_label
 
 DLBOT_SESSIONS = {}
+DLBOT_TASKS = {}
 BOT_PAGE_SIZE = 8
 FILE_PAGE_SIZE = 8
 
@@ -304,6 +305,8 @@ async def _run_downloads(user_id, state, items):
         await app.send_message(user_id, "⏳ A DLBots download is already running. Please wait for it to finish.")
         return
     state["busy"] = True
+    task = asyncio.current_task()
+    DLBOT_TASKS[user_id] = task
     successes, failures = 0, []
     try:
         for index, item in enumerate(items, 1):
@@ -341,8 +344,18 @@ async def _run_downloads(user_id, state, items):
         if failures:
             summary += "\n\n" + "\n".join(f"• `{x}`" for x in failures[:20])
         await app.send_message(user_id, summary)
+    except asyncio.CancelledError:
+        state["selected_files"] = []
+        try:
+            if "status" in locals() and status is not None:
+                await status.edit_text("⛔ **DLBots cancelled by /cancel.** Current transfer and remaining selected files were stopped.")
+        except Exception:
+            pass
+        raise
     finally:
         state["busy"] = False
+        if DLBOT_TASKS.get(user_id) is task:
+            DLBOT_TASKS.pop(user_id, None)
 
 
 @app.on_callback_query(filters.regex(r"^dlfile:[a-f0-9]{8}:\d+$"))
@@ -357,7 +370,8 @@ async def download_from_other_bot(_, query):
     if state.get("busy"):
         return await query.answer("A download is already running.", show_alert=True)
     await query.answer("Download started")
-    asyncio.create_task(_run_downloads(query.from_user.id, state, [item]))
+    task = asyncio.create_task(_run_downloads(query.from_user.id, state, [item]))
+    DLBOT_TASKS[query.from_user.id] = task
 
 
 @app.on_callback_query(filters.regex(r"^dlall:[a-f0-9]{8}$"))
@@ -369,4 +383,5 @@ async def download_all_bot_media(_, query):
     if state.get("busy"):
         return await query.answer("A download is already running.", show_alert=True)
     await query.answer("Download All started")
-    asyncio.create_task(_run_downloads(query.from_user.id, state, list(state["selected_files"])))
+    task = asyncio.create_task(_run_downloads(query.from_user.id, state, list(state["selected_files"])))
+    DLBOT_TASKS[query.from_user.id] = task
